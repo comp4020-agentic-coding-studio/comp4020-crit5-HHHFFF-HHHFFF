@@ -27,11 +27,13 @@
       </nav>
     </header>
     <main>
-      <h1>COMP4020 prototype</h1>
-      <p>
-        Replace this with your prototype. This week's brief is on the course website;
-        <code>spec/README.md</code> explains how the checks in this repo relate to it.
-      </p>
+      <div id="game">
+        <canvas id="arena" aria-label="Space shooter arena"></canvas>
+        <div id="select">
+          <h1>Choose your ship</h1>
+          <div id="ship-list"></div>
+        </div>
+      </div>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>
