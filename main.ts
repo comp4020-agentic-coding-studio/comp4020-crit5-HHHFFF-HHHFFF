@@ -1,8 +1,10 @@
 import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
+  createEdgePowerUp,
   createEventSquadMember,
   createNormalEnemy,
+  randomPowerUpKind,
   SHIPS,
   updateBoss,
   updatePlayerFiring,
@@ -49,6 +51,7 @@ for (const [index, ship] of SHIPS.entries()) {
 
 let normalSpawnMs = 800;
 let eventSpawnMs = 6000;
+let edgePowerUpMs = 7000;
 
 function maybeSpawnEnemies(dtMs: number): void {
   if (state.phase !== "playing") return;
@@ -63,6 +66,15 @@ function maybeSpawnEnemies(dtMs: number): void {
     eventSpawnMs = 9000 + Math.random() * 6000;
     const startX = Math.random() < 0.5 ? ARENA_WIDTH * 0.3 : ARENA_WIDTH * 0.7;
     for (let i = 0; i < 4; i++) state.enemies.push(createEventSquadMember(i, startX));
+  }
+}
+
+function maybeDriftPowerUp(dtMs: number): void {
+  if (state.phase !== "playing" && state.phase !== "boss") return;
+  edgePowerUpMs -= dtMs;
+  if (edgePowerUpMs <= 0) {
+    edgePowerUpMs = 12000 + Math.random() * 8000;
+    state.powerUps.push(createEdgePowerUp(randomPowerUpKind()));
   }
 }
 
@@ -87,6 +99,7 @@ function frame(now: number): void {
     }
 
     maybeSpawnEnemies(dtMs);
+    maybeDriftPowerUp(dtMs);
     stepEnemyMovement(dtSeconds, dtMs);
 
     if (state.phase === "boss" && state.boss && player) {

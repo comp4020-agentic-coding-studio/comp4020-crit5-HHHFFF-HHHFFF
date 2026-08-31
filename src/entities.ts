@@ -109,6 +109,7 @@ export interface PowerUp {
   kind: PowerUpKind;
   x: number;
   y: number;
+  vx: number;
   vy: number;
 }
 
@@ -312,15 +313,28 @@ export function isBulletOffscreen(bullet: Bullet): boolean {
 }
 
 export function createPowerUp(kind: PowerUpKind, x: number, y: number): PowerUp {
-  return { kind, x, y, vy: 60 };
+  return { kind, x, y, vx: 0, vy: 60 };
+}
+
+/** Drifts in from a random screen edge instead of dropping from a kill. */
+export function createEdgePowerUp(kind: PowerUpKind): PowerUp {
+  const fromLeft = Math.random() < 0.5;
+  return {
+    kind,
+    x: fromLeft ? -20 : ARENA_WIDTH + 20,
+    y: 80 + Math.random() * (UPPER_HALF - 80),
+    vx: (fromLeft ? 1 : -1) * 40,
+    vy: 20,
+  };
 }
 
 export function updatePowerUp(powerUp: PowerUp, dtSeconds: number): void {
+  powerUp.x += powerUp.vx * dtSeconds;
   powerUp.y += powerUp.vy * dtSeconds;
 }
 
 export function isPowerUpOffscreen(powerUp: PowerUp): boolean {
-  return powerUp.y > ARENA_HEIGHT + 20;
+  return powerUp.y > ARENA_HEIGHT + 20 || powerUp.x < -40 || powerUp.x > ARENA_WIDTH + 40;
 }
 
 export function applyPowerUp(weapon: WeaponState, kind: PowerUpKind): void {
