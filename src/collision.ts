@@ -18,6 +18,7 @@ import {
 import { defeatBoss, hitPlayer, registerKill, state } from "./state";
 
 const PLAYER_RADIUS = 16;
+const ENEMY_RADIUS = 14;
 const PLAYER_INVULNERABLE_MS = 500;
 const POWERUP_DROP_CHANCE = 0.35;
 
@@ -46,11 +47,23 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
     }
   }
 
+  // enemy ships ramming the player: a hit for the player, destroys the enemy
+  if (player.invulnerableMs <= 0) {
+    for (const enemy of state.enemies) {
+      if (circleHit(enemy.x, enemy.y, ENEMY_RADIUS, player.x, player.y, PLAYER_RADIUS)) {
+        hitPlayer();
+        player.invulnerableMs = PLAYER_INVULNERABLE_MS;
+        enemy.hp = 0;
+        break;
+      }
+    }
+  }
+
   // player bullets vs enemies
   for (const enemy of state.enemies) {
     for (const bullet of state.bullets) {
       if (bullet.owner !== "player") continue;
-      if (circleHit(bullet.x, bullet.y, bullet.width / 2, enemy.x, enemy.y, 14)) {
+      if (circleHit(bullet.x, bullet.y, bullet.width / 2, enemy.x, enemy.y, ENEMY_RADIUS)) {
         enemy.hp -= bullet.damage;
         bullet.y = -9999;
       }
