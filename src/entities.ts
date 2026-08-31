@@ -8,7 +8,10 @@ export const ARENA_WIDTH = 480;
 export const ARENA_HEIGHT = 800;
 export const UPPER_HALF = ARENA_HEIGHT * 0.55;
 
+export type ShipKey = "interceptor" | "bulwark" | "striker";
+
 export interface ShipDef {
+  key: ShipKey;
   name: string;
   color: string;
   speed: number; // px/s
@@ -19,14 +22,16 @@ export interface ShipDef {
 
 export const SHIPS: ShipDef[] = [
   {
+    key: "interceptor",
     name: "Interceptor",
-    color: "#4fd1ff",
+    color: "#ff5c5c",
     speed: 260,
     fireIntervalMs: 180,
     bulletSpeed: 480,
     blurb: "Fast, fragile, average fire rate.",
   },
   {
+    key: "bulwark",
     name: "Bulwark",
     color: "#ffb84f",
     speed: 170,
@@ -35,6 +40,7 @@ export const SHIPS: ShipDef[] = [
     blurb: "Slow, tankier feel, wider bullets.",
   },
   {
+    key: "striker",
     name: "Striker",
     color: "#ff5f7e",
     speed: 220,
@@ -347,4 +353,33 @@ const POWERUP_KINDS: PowerUpKind[] = ["laser", "diagonal", "multiply"];
 
 export function randomPowerUpKind(): PowerUpKind {
   return POWERUP_KINDS[Math.floor(Math.random() * POWERUP_KINDS.length)];
+}
+
+export type ExplosionKind = "enemy" | "boss";
+
+export const EXPLOSION_FRAME_COUNT = 6;
+const EXPLOSION_FRAME_MS = 70;
+
+export interface Explosion {
+  kind: ExplosionKind;
+  x: number;
+  y: number;
+  frame: number;
+  frameMs: number;
+}
+
+export function createExplosion(kind: ExplosionKind, x: number, y: number): Explosion {
+  return { kind, x, y, frame: 0, frameMs: EXPLOSION_FRAME_MS };
+}
+
+export function updateExplosion(explosion: Explosion, dtMs: number): void {
+  explosion.frameMs -= dtMs;
+  while (explosion.frameMs <= 0 && explosion.frame < EXPLOSION_FRAME_COUNT) {
+    explosion.frame += 1;
+    explosion.frameMs += EXPLOSION_FRAME_MS;
+  }
+}
+
+export function isExplosionDone(explosion: Explosion): boolean {
+  return explosion.frame >= EXPLOSION_FRAME_COUNT;
 }

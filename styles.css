@@ -77,6 +77,13 @@ a {
   cursor: pointer;
 }
 
+.ship-card img {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  align-self: center;
+}
+
 .ship-card strong {
   color: var(--ship-color);
 }

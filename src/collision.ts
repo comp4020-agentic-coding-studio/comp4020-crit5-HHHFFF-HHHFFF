@@ -6,13 +6,16 @@
 
 import {
   applyPowerUp,
+  createExplosion,
   createPowerUp,
   isBulletOffscreen,
   isEnemyOffscreen,
+  isExplosionDone,
   isPowerUpOffscreen,
   randomPowerUpKind,
   updateBullet,
   updateEnemy,
+  updateExplosion,
   updatePowerUp,
 } from "./entities";
 import { defeatBoss, hitPlayer, registerKill, state } from "./state";
@@ -79,13 +82,18 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
         bullet.y = -9999;
       }
     }
-    if (state.boss.hp <= 0) defeatBoss();
+    if (state.boss.hp <= 0) {
+      const { x, y } = state.boss;
+      defeatBoss();
+      state.explosions.push(createExplosion("boss", x, y));
+    }
   }
 
   // dead enemies: drop a chance of a power-up, count towards the boss meter
   const survivors = [];
   for (const enemy of state.enemies) {
     if (enemy.hp <= 0) {
+      state.explosions.push(createExplosion("enemy", enemy.x, enemy.y));
       if (enemy.kind === "normal") {
         registerKill();
         if (Math.random() < POWERUP_DROP_CHANCE) {
@@ -118,4 +126,9 @@ export function stepEnemyMovement(dtSeconds: number, dtMs: number): void {
   const player = state.player;
   if (!player) return;
   for (const enemy of state.enemies) updateEnemy(enemy, dtSeconds, dtMs, state.bullets, player.x);
+}
+
+export function stepExplosions(dtMs: number): void {
+  for (const explosion of state.explosions) updateExplosion(explosion, dtMs);
+  state.explosions = state.explosions.filter((explosion) => !isExplosionDone(explosion));
 }

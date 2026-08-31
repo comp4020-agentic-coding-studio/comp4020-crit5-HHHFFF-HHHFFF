@@ -5,7 +5,16 @@
 // through the exact same functions instead of two implementations of "you
 // lost" or "you won".
 
-import { type Boss, type Bullet, type Enemy, createBoss, createPlayer, type Player, type PowerUp } from "./entities";
+import {
+  type Boss,
+  type Bullet,
+  type Enemy,
+  createBoss,
+  createPlayer,
+  type Explosion,
+  type Player,
+  type PowerUp,
+} from "./entities";
 
 export type GamePhase = "select" | "playing" | "boss" | "won" | "lost";
 
@@ -15,6 +24,7 @@ export interface GameState {
   enemies: Enemy[];
   bullets: Bullet[];
   powerUps: PowerUp[];
+  explosions: Explosion[];
   boss: Boss | null;
   progress: number;
   elapsedMs: number;
@@ -29,6 +39,7 @@ function createInitialState(): GameState {
     enemies: [],
     bullets: [],
     powerUps: [],
+    explosions: [],
     boss: null,
     progress: 0,
     elapsedMs: 0,
@@ -52,6 +63,7 @@ export function selectShip(shipIndex: number): void {
   state.enemies = [];
   state.bullets = [];
   state.powerUps = [];
+  state.explosions = [];
   state.boss = null;
   state.progress = 0;
   state.elapsedMs = 0;

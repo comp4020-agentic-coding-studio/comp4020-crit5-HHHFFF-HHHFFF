@@ -10,7 +10,8 @@ import {
   updatePlayerFiring,
   updatePlayerMovement,
 } from "./src/entities";
-import { stepBulletsAndCollisions, stepEnemyMovement } from "./src/collision";
+import { stepBulletsAndCollisions, stepEnemyMovement, stepExplosions } from "./src/collision";
+import { SHIP_SPRITES } from "./src/assets";
 import { installHarness } from "./src/harness";
 import * as render from "./src/render";
 import { createInput } from "./src/input";
@@ -44,7 +45,11 @@ for (const [index, ship] of SHIPS.entries()) {
   const button = document.createElement("button");
   button.className = "ship-card";
   button.style.setProperty("--ship-color", ship.color);
-  button.innerHTML = `<strong>${ship.name}</strong><span>${ship.blurb}</span>`;
+  const thumb = document.createElement("img");
+  thumb.src = SHIP_SPRITES[ship.key].src;
+  thumb.alt = "";
+  button.appendChild(thumb);
+  button.insertAdjacentHTML("beforeend", `<strong>${ship.name}</strong><span>${ship.blurb}</span>`);
   button.addEventListener("click", () => selectShip(index));
   shipList.appendChild(button);
 }
@@ -108,12 +113,14 @@ function frame(now: number): void {
 
     stepBulletsAndCollisions(dtSeconds, dtMs);
   }
+  stepExplosions(dtMs);
 
   render.clear(ctx);
   for (const enemy of state.enemies) render.drawEnemy(ctx, enemy);
   if (state.boss) render.drawBoss(ctx, state.boss);
   for (const bullet of state.bullets) render.drawBullet(ctx, bullet);
   for (const powerUp of state.powerUps) render.drawPowerUp(ctx, powerUp);
+  for (const explosion of state.explosions) render.drawExplosion(ctx, explosion);
   if (state.player) {
     render.drawPlayer(ctx, state.player);
     render.drawLives(ctx, state.player.lives, state.player.maxLives);
