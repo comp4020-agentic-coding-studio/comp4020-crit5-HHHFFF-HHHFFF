@@ -1,0 +1,140 @@
+<!doctype html>
+<!--
+  Where the source rectangles in src/assets.ts came from.
+
+  The generated art has a lot of transparent margin, and it varies per file:
+  enemy-normal's ship fills 59% of its frame width while boss fills 94%. A
+  draw of the whole frame therefore produces a sprite that is both too small
+  and the wrong shape, which is exactly what the first art pass looked like
+  (the player's bullet came out ~2px wide and read as a faint dash).
+
+  Rather than eyeball crops, this page loads each PNG, draws it to a canvas,
+  walks getImageData for the alpha bounding box, and prints the result. It
+  also reports contiguous runs of occupied columns/rows, which is how the
+  explosion sheets were confirmed as six 362px frames sharing one row band,
+  and how the two packed bullet files were split.
+
+  vite.config.ts skips scripts/, so this is not a build entry and does not
+  ship. To run it:
+
+    pnpm build
+    cp scripts/measure-sprites.html dist/
+    npx vite preview --port 4173 --strictPort &
+    chrome --headless --disable-gpu --virtual-time-budget=25000 \
+      --dump-dom http://localhost:4173/measure-sprites.html
+    rm dist/measure-sprites.html
+
+  It has to be served over http and sit in dist/ (same origin as ./art/), or
+  getImageData taints on a cross-origin/file:// image and throws.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>sprite alpha bounds</title>
+  </head>
+  <body>
+    <pre id="out">working</pre>
+    <script type="module">
+      const WHOLE = [
+        "ship-interceptor",
+        "ship-bulwark",
+        "ship-striker",
+        "enemy-normal",
+        "enemy-event",
+        "boss",
+        "powerup-laser",
+        "powerup-diagonal",
+        "powerup-multiply",
+        "bullet-player",
+        "bullet-enemy",
+        "explosion-enemy",
+        "explosion-boss",
+      ];
+
+      // The two files that pack more than one sprite. Measured per half,
+      // because a union box over both leaves the smaller form in padding.
+      const REGIONS = [
+        ["bullet-player.normal", "bullet-player", 0, 0, 1024, 580],
+        ["bullet-player.laser", "bullet-player", 0, 580, 1024, 956],
+        ["bullet-enemy.capsule", "bullet-enemy", 0, 0, 724, 1086],
+        ["bullet-enemy.orb", "bullet-enemy", 724, 0, 724, 1086],
+      ];
+
+      const ALPHA = 12; // ignore the faintest halo pixels
+
+      function load(name) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error(name));
+          img.src = `./art/${name}.png`;
+        });
+      }
+
+      const canvases = {};
+      async function canvasFor(name) {
+        if (!canvases[name]) {
+          const img = await load(name);
+          const c = document.createElement("canvas");
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          c.getContext("2d").drawImage(img, 0, 0);
+          canvases[name] = c;
+        }
+        return canvases[name];
+      }
+
+      function runs(occupied) {
+        const out = [];
+        let start = -1;
+        for (let i = 0; i <= occupied.length; i++) {
+          const on = i < occupied.length && occupied[i] === 1;
+          if (on && start < 0) start = i;
+          if (!on && start >= 0) {
+            out.push([start, i - 1]);
+            start = -1;
+          }
+        }
+        return out;
+      }
+
+      function bounds(canvas, rx, ry, rw, rh) {
+        const { data } = canvas.getContext("2d").getImageData(rx, ry, rw, rh);
+        const cols = new Uint8Array(rw);
+        const rows = new Uint8Array(rh);
+        let minX = rw;
+        let minY = rh;
+        let maxX = -1;
+        let maxY = -1;
+        for (let y = 0; y < rh; y++) {
+          for (let x = 0; x < rw; x++) {
+            if (data[(y * rw + x) * 4 + 3] <= ALPHA) continue;
+            cols[x] = 1;
+            rows[y] = 1;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+        if (maxX < 0) return null;
+        return {
+          box: [rx + minX, ry + minY, maxX - minX + 1, maxY - minY + 1],
+          colRuns: runs(cols),
+          rowRuns: runs(rows),
+        };
+      }
+
+      const result = {};
+      for (const name of WHOLE) {
+        const c = await canvasFor(name);
+        result[name] = { size: [c.width, c.height], ...bounds(c, 0, 0, c.width, c.height) };
+      }
+      for (const [label, name, rx, ry, rw, rh] of REGIONS) {
+        const c = await canvasFor(name);
+        result[label] = bounds(c, rx, ry, rw, rh);
+      }
+      document.getElementById("out").textContent = JSON.stringify(result, null, 1);
+    </script>
+  </body>
+</html>

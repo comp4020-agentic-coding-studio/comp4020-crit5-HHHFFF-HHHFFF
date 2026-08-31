@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>COMP4020 prototype</title>
+    <title>Endless Danmaku</title>
     <meta
       name="description"
-      content="Replace this with one sentence saying what this page is. A search result and a link preview both show it."
+      content="An endless space shooter: pick one of three ships and hold out as the enemy waves and bullet patterns keep thickening."
     />
 
     <!--
@@ -31,7 +31,27 @@
         <canvas id="arena" aria-label="Space shooter arena"></canvas>
         <div id="select">
           <h1>Choose your ship</h1>
-          <div id="ship-list"></div>
+          <div id="select-body">
+            <div id="ship-list"></div>
+            <div id="ship-panel">
+              <p id="panel-name"></p>
+              <p id="panel-blurb"></p>
+              <div id="panel-stats"></div>
+            </div>
+          </div>
+          <!--
+            A control affordance, not a tutorial: four key caps that light up
+            when the real keys go down, and cycle on their own until they do.
+            aria-hidden because "W A S D" read aloud is noise, and because the
+            brief's no-instructions rule means the controls are meant to be
+            found by trying them.
+          -->
+          <div id="keys" aria-hidden="true">
+            <span class="key" data-dir="up">W</span>
+            <span class="key" data-dir="left">A</span>
+            <span class="key" data-dir="down">S</span>
+            <span class="key" data-dir="right">D</span>
+          </div>
         </div>
       </div>
     </main>

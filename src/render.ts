@@ -1,8 +1,12 @@
-// Canvas draw routines. Every shape is keyed off entity type + size, not
-// hand-positioned per asset — swapping placeholder shapes for real sprites
-// later is a change to this file only, not to game logic. (That swap has now
-// happened: every entity below draws from src/assets.ts instead of a vector
-// shape.)
+// Canvas draw routines. Every sprite is keyed off entity type + a target box,
+// not hand-positioned per asset — which is what let the placeholder vector
+// shapes be swapped for real art without touching game logic, and what lets
+// every size below be tuned by changing one number.
+//
+// Sizes are given as a box to fit inside, never as an exact width and height:
+// the measured source rects in assets.ts all have their own aspect ratios, and
+// forcing a square destination on a 0.22-aspect bullet is what made the first
+// pass look squashed.
 
 import {
   ARENA_HEIGHT,
@@ -11,126 +15,164 @@ import {
   type Bullet,
   type Enemy,
   type Explosion,
+  OVERDRIVE_MS,
   type Player,
   type PowerUp,
 } from "./entities";
-import { images, SHIP_SPRITES } from "./assets";
+import {
+  backgroundImage,
+  BOSS_SPRITE,
+  BULLET_SPRITES,
+  ENEMY_SPRITES,
+  EXPLOSION_SHEETS,
+  POWERUP_SPRITES,
+  SHIP_SPRITES,
+  sheetFrame,
+  type Sprite,
+} from "./assets";
 
-const POWERUP_IMAGES: Record<PowerUp["kind"], HTMLImageElement> = {
-  laser: images.powerupLaser,
-  diagonal: images.powerupDiagonal,
-  multiply: images.powerupMultiply,
-};
-
-const EXPLOSION_FRAME_WIDTH = 362;
-const EXPLOSION_FRAME_HEIGHT = 724;
-
-/** `drawImage` on an image whose data hasn't arrived yet is a no-op in every
- * engine, but `.complete` lets us skip the call entirely rather than rely on
- * that per-engine behavior. */
-function drawCentered(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-): void {
-  if (!img.complete || img.naturalWidth === 0) return;
-  ctx.drawImage(img, x - w / 2, y - h / 2, w, h);
+function ready(img: HTMLImageElement): boolean {
+  return img.complete && img.naturalWidth > 0;
 }
 
-function drawSliceCentered(
+/** Draws a sprite centred on (cx, cy), scaled to fit inside boxW x boxH with
+ * its own aspect ratio preserved. */
+function drawSprite(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
-  sx: number,
-  sy: number,
-  sw: number,
-  sh: number,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
+  spr: Sprite,
+  cx: number,
+  cy: number,
+  boxW: number,
+  boxH: number,
 ): void {
-  if (!img.complete || img.naturalWidth === 0) return;
-  ctx.drawImage(img, sx, sy, sw, sh, x - w / 2, y - h / 2, w, h);
+  if (!ready(spr.img)) return;
+  const scale = Math.min(boxW / spr.sw, boxH / spr.sh);
+  const w = spr.sw * scale;
+  const h = spr.sh * scale;
+  ctx.drawImage(spr.img, spr.sx, spr.sy, spr.sw, spr.sh, cx - w / 2, cy - h / 2, w, h);
 }
 
-export function clear(ctx: CanvasRenderingContext2D): void {
+// The backdrop art isn't tileable, so every second copy is drawn flipped: the
+// join between a copy and its flipped neighbour is then image-bottom against
+// image-bottom, and the join between one pair and the next is top against
+// top. Both match pixel for pixel, so a 2 x ARENA_HEIGHT pair scrolls forever
+// with no visible seam — which a naive repeat would show every 800px.
+const BACKDROP_UNIT = ARENA_HEIGHT * 2;
+
+function drawBackdropPair(ctx: CanvasRenderingContext2D, img: HTMLImageElement, top: number): void {
+  if (top + BACKDROP_UNIT <= 0 || top >= ARENA_HEIGHT) return;
+  ctx.drawImage(img, 0, top, ARENA_WIDTH, ARENA_HEIGHT);
+  ctx.save();
+  ctx.translate(0, top + BACKDROP_UNIT);
+  ctx.scale(1, -1);
+  ctx.drawImage(img, 0, 0, ARENA_WIDTH, ARENA_HEIGHT);
+  ctx.restore();
+}
+
+export function clear(ctx: CanvasRenderingContext2D, scrollY: number): void {
   ctx.fillStyle = "#05070d";
   ctx.fillRect(0, 0, ARENA_WIDTH, ARENA_HEIGHT);
-  const bg = images.background;
-  if (bg.complete && bg.naturalWidth > 0) {
-    ctx.drawImage(bg, 0, 0, ARENA_WIDTH, ARENA_HEIGHT);
-  }
+
+  if (!ready(backgroundImage)) return;
+  // Content moves *down* as scrollY grows, so the ship reads as flying up.
+  const offset = ((scrollY % BACKDROP_UNIT) + BACKDROP_UNIT) % BACKDROP_UNIT;
+  drawBackdropPair(ctx, backgroundImage, offset - BACKDROP_UNIT);
+  drawBackdropPair(ctx, backgroundImage, offset);
 }
 
 export function drawPlayer(ctx: CanvasRenderingContext2D, player: Player): void {
   ctx.save();
   ctx.globalAlpha = player.invulnerableMs > 0 && Math.floor(player.invulnerableMs / 80) % 2 === 0 ? 0.35 : 1;
-  drawCentered(ctx, SHIP_SPRITES[player.ship.key], player.x, player.y, 48, 48);
+
+  if (player.overdriveMs > 0) {
+    // A pulsing halo while the free laser runs — the only cue that the meter
+    // paid out, since nothing was pressed to make it happen.
+    const pulse = 0.5 + 0.5 * Math.sin(player.overdriveMs / 80);
+    ctx.save();
+    ctx.globalAlpha *= 0.2 + 0.22 * pulse;
+    ctx.fillStyle = "#c8faff";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 28 + pulse * 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawSprite(ctx, SHIP_SPRITES[player.ship.key], player.x, player.y, 46, 46);
   ctx.restore();
 }
 
 export function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
-  const img = enemy.kind === "event" ? images.enemyEvent : images.enemyNormal;
-  drawCentered(ctx, img, enemy.x, enemy.y, 40, 40);
+  drawSprite(ctx, ENEMY_SPRITES[enemy.kind], enemy.x, enemy.y, 42, 42);
 }
 
 export function drawBoss(ctx: CanvasRenderingContext2D, boss: Boss): void {
-  drawCentered(ctx, images.boss, boss.x, boss.y, 120, 120);
+  drawSprite(ctx, BOSS_SPRITE, boss.x, boss.y, 124, 124);
 
   const barWidth = 200;
   const x = ARENA_WIDTH / 2 - barWidth / 2;
+  // Sits below the lives and the two right-hand meters so nothing overlaps.
+  const y = 52;
   ctx.fillStyle = "#2a0f16";
-  ctx.fillRect(x, 24, barWidth, 10);
+  ctx.fillRect(x, y, barWidth, 10);
   ctx.fillStyle = "#ff3b6b";
-  ctx.fillRect(x, 24, barWidth * Math.max(0, boss.hp / boss.maxHp), 10);
+  ctx.fillRect(x, y, barWidth * Math.max(0, boss.hp / boss.maxHp), 10);
+
+  ctx.fillStyle = "#ff9ab4";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(`WAVE ${boss.round}`, ARENA_WIDTH / 2, y + 14);
 }
 
 export function drawBullet(ctx: CanvasRenderingContext2D, bullet: Bullet): void {
   if (bullet.owner === "player") {
-    const isLaser = bullet.width >= 10;
-    const sy = isLaser ? 768 : 0;
-    const [w, h] = isLaser ? [20, 44] : [12, 30];
-    drawSliceCentered(ctx, images.bulletPlayer, 0, sy, 1024, 768, bullet.x, bullet.y, w, h);
+    // width is the only thing that distinguishes the two player forms, and
+    // it's already set by updatePlayerFiring — no extra field needed.
+    if (bullet.width >= 10) drawSprite(ctx, BULLET_SPRITES.playerLaser, bullet.x, bullet.y, 18, 46);
+    else drawSprite(ctx, BULLET_SPRITES.playerNormal, bullet.x, bullet.y, 10, 30);
     return;
   }
 
-  const isRound = bullet.width === bullet.height;
-  const sx = isRound ? 724 : 0;
-  const [w, h] = isRound ? [18, 18] : [16, 28];
-  drawSliceCentered(ctx, images.bulletEnemy, sx, 0, 724, 1086, bullet.x, bullet.y, w, h);
+  // Boss patterns all fire square bullets and patrolling enemies fire tall
+  // ones, so the orb/capsule choice falls out of existing data.
+  if (bullet.width === bullet.height) drawSprite(ctx, BULLET_SPRITES.enemyOrb, bullet.x, bullet.y, 18, 18);
+  else drawSprite(ctx, BULLET_SPRITES.enemyCapsule, bullet.x, bullet.y, 12, 26);
 }
 
 export function drawPowerUp(ctx: CanvasRenderingContext2D, powerUp: PowerUp): void {
-  drawCentered(ctx, POWERUP_IMAGES[powerUp.kind], powerUp.x, powerUp.y, 28, 28);
+  drawSprite(ctx, POWERUP_SPRITES[powerUp.kind], powerUp.x, powerUp.y, 30, 30);
 }
 
 export function drawExplosion(ctx: CanvasRenderingContext2D, explosion: Explosion): void {
-  const img = explosion.kind === "boss" ? images.explosionBoss : images.explosionEnemy;
-  const [w, h] = explosion.kind === "boss" ? [90, 180] : [48, 96];
-  drawSliceCentered(
-    ctx,
-    img,
-    explosion.frame * EXPLOSION_FRAME_WIDTH,
-    0,
-    EXPLOSION_FRAME_WIDTH,
-    EXPLOSION_FRAME_HEIGHT,
-    explosion.x,
-    explosion.y,
-    w,
-    h,
-  );
+  const sheet = EXPLOSION_SHEETS[explosion.kind];
+  const box = explosion.kind === "boss" ? 150 : 72;
+  drawSprite(ctx, sheetFrame(sheet, explosion.frame), explosion.x, explosion.y, box, box);
 }
 
+const METER_WIDTH = 140;
+const METER_X = ARENA_WIDTH - METER_WIDTH - 16;
+
 export function drawProgressBar(ctx: CanvasRenderingContext2D, progress: number): void {
-  const width = 140;
-  const x = ARENA_WIDTH - width - 16;
   ctx.fillStyle = "#101526";
-  ctx.fillRect(x, 16, width, 10);
+  ctx.fillRect(METER_X, 16, METER_WIDTH, 10);
   ctx.fillStyle = "#4fd1ff";
-  ctx.fillRect(x, 16, width * progress, 10);
+  ctx.fillRect(METER_X, 16, METER_WIDTH * progress, 10);
+}
+
+/** Fills yellow as energy banks, then flips to a draining cyan bar for the ten
+ * seconds of laser it buys — so one strip reads as both charge and timer. */
+export function drawEnergyBar(ctx: CanvasRenderingContext2D, energy: number, overdriveMs: number): void {
+  const y = 32;
+  ctx.fillStyle = "#101526";
+  ctx.fillRect(METER_X, y, METER_WIDTH, 8);
+
+  if (overdriveMs > 0) {
+    ctx.fillStyle = "#c8faff";
+    ctx.fillRect(METER_X, y, METER_WIDTH * (overdriveMs / OVERDRIVE_MS), 8);
+    return;
+  }
+  ctx.fillStyle = energy >= 1 ? "#fff8c8" : "#ffe14f";
+  ctx.fillRect(METER_X, y, METER_WIDTH * energy, 8);
 }
 
 export function drawLives(ctx: CanvasRenderingContext2D, lives: number, maxLives: number): void {
@@ -144,12 +186,19 @@ export function drawLives(ctx: CanvasRenderingContext2D, lives: number, maxLives
   ctx.globalAlpha = 1;
 }
 
-export function drawEndBanner(ctx: CanvasRenderingContext2D, text: string): void {
-  ctx.fillStyle = "rgba(5, 7, 13, 0.6)";
+export function drawEndBanner(ctx: CanvasRenderingContext2D, title: string, lines: string[]): void {
+  ctx.fillStyle = "rgba(5, 7, 13, 0.72)";
   ctx.fillRect(0, 0, ARENA_WIDTH, ARENA_HEIGHT);
-  ctx.fillStyle = "#f4f6ff";
-  ctx.font = "bold 32px system-ui, sans-serif";
+
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, ARENA_WIDTH / 2, ARENA_HEIGHT / 2);
+  ctx.fillStyle = "#f4f6ff";
+  ctx.font = "bold 34px system-ui, sans-serif";
+  ctx.fillText(title, ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 34);
+
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.fillStyle = "#9aa7c7";
+  for (const [index, line] of lines.entries()) {
+    ctx.fillText(line, ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 6 + index * 26);
+  }
 }

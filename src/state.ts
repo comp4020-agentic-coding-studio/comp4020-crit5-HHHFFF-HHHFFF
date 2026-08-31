@@ -3,20 +3,27 @@
 // phases; this file is the only place a phase actually changes, so
 // window.harness (harness.ts) and real gameplay (collision.ts, main.ts) go
 // through the exact same functions instead of two implementations of "you
-// lost" or "you won".
+// lost" or "the boss went down".
+//
+// Endless mode: there is no winning phase. The boss is a recurring wave, not
+// a finish line — downing it banks the round and drops straight back into
+// play with everything a notch harder. The run ends exactly one way.
 
 import {
+  addKillEnergy,
+  BACKGROUND_SPEED,
   type Boss,
   type Bullet,
-  type Enemy,
   createBoss,
   createPlayer,
+  difficultyAt,
+  type Enemy,
   type Explosion,
   type Player,
   type PowerUp,
 } from "./entities";
 
-export type GamePhase = "select" | "playing" | "boss" | "won" | "lost";
+export type GamePhase = "select" | "playing" | "boss" | "lost";
 
 export interface GameState {
   phase: GamePhase;
@@ -28,6 +35,8 @@ export interface GameState {
   boss: Boss | null;
   progress: number;
   elapsedMs: number;
+  bossesDowned: number;
+  scrollY: number;
 }
 
 const KILLS_TO_BOSS = 10;
@@ -43,6 +52,8 @@ function createInitialState(): GameState {
     boss: null,
     progress: 0,
     elapsedMs: 0,
+    bossesDowned: 0,
+    scrollY: 0,
   };
 }
 
@@ -67,13 +78,32 @@ export function selectShip(shipIndex: number): void {
   state.boss = null;
   state.progress = 0;
   state.elapsedMs = 0;
+  state.bossesDowned = 0;
   state.phase = "playing";
   kills = 0;
 }
 
+/** How hard the run currently is. Everything that scales reads this rather
+ * than elapsed time directly, so the ramp is defined in exactly one place. */
+export function currentDifficulty(): number {
+  return difficultyAt(state.elapsedMs);
+}
+
+/** Advances the run clock — and with it the difficulty. Only called while
+ * play is actually happening, so a paused select screen doesn't bank time. */
+export function tickClock(dtMs: number): void {
+  state.elapsedMs += dtMs;
+}
+
+/** The backdrop keeps moving in every phase, including select: a still
+ * starfield behind the ship picker looks broken, not calm. */
+export function advanceScroll(dtMs: number): void {
+  state.scrollY += BACKGROUND_SPEED * currentDifficulty() * (dtMs / 1000);
+}
+
 /** The one way a bullet (or the test harness) takes a life. */
 export function hitPlayer(): void {
-  if (!state.player || state.phase === "won" || state.phase === "lost") return;
+  if (!state.player || state.phase === "lost") return;
   state.player.lives -= 1;
   if (state.player.lives <= 0) {
     state.phase = "lost";
@@ -84,6 +114,7 @@ export function registerKill(): void {
   if (state.phase !== "playing") return;
   kills += 1;
   state.progress = Math.min(1, kills / KILLS_TO_BOSS);
+  if (state.player) addKillEnergy(state.player);
   if (kills >= KILLS_TO_BOSS) startBossPhase();
 }
 
@@ -91,13 +122,18 @@ function startBossPhase(): void {
   state.phase = "boss";
   state.enemies = [];
   state.bullets = [];
-  state.boss = createBoss();
+  state.boss = createBoss(state.bossesDowned + 1);
 }
 
-/** The one way the boss (or the test harness) is defeated. */
+/** The one way the boss (or the test harness) is defeated. In endless mode
+ * that is a wave cleared, not a run won: the meter resets and the next boss
+ * is already queued up behind another KILLS_TO_BOSS. */
 export function defeatBoss(): void {
   if (state.phase !== "boss") return;
   state.boss = null;
   state.bullets = [];
-  state.phase = "won";
+  state.bossesDowned += 1;
+  kills = 0;
+  state.progress = 0;
+  state.phase = "playing";
 }

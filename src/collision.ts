@@ -18,12 +18,15 @@ import {
   updateExplosion,
   updatePowerUp,
 } from "./entities";
-import { defeatBoss, hitPlayer, registerKill, state } from "./state";
+import { currentDifficulty, defeatBoss, hitPlayer, registerKill, state } from "./state";
 
 const PLAYER_RADIUS = 16;
 const ENEMY_RADIUS = 14;
 const PLAYER_INVULNERABLE_MS = 500;
-const POWERUP_DROP_CHANCE = 0.35;
+// Low on purpose. Drops used to land often enough that a run was fully
+// upgraded inside the first minute, which flattened the endless ramp before
+// it started — the power-ups have to stay something you notice arriving.
+const POWERUP_DROP_CHANCE = 0.12;
 
 function circleHit(ax: number, ay: number, ar: number, bx: number, by: number, br: number): boolean {
   const dx = ax - bx;
@@ -125,7 +128,8 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
 export function stepEnemyMovement(dtSeconds: number, dtMs: number): void {
   const player = state.player;
   if (!player) return;
-  for (const enemy of state.enemies) updateEnemy(enemy, dtSeconds, dtMs, state.bullets, player.x);
+  const difficulty = currentDifficulty();
+  for (const enemy of state.enemies) updateEnemy(enemy, dtSeconds, dtMs, state.bullets, player.x, difficulty);
 }
 
 export function stepExplosions(dtMs: number): void {
