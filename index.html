@@ -21,6 +21,12 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <!--
+      The starfield behind the whole page. Decorative and driven entirely by
+      main.ts, so it is hidden from assistive tech; the arena canvas above it
+      is the one that carries a label.
+    -->
+    <canvas id="backdrop" aria-hidden="true"></canvas>
     <header>
       <nav aria-label="Primary">
         <a href="./">Home</a>

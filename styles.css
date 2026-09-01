@@ -1,19 +1,46 @@
 body {
   margin: 0;
-  padding: 2rem;
+  padding: 0;
   font-family: system-ui, sans-serif;
   line-height: 1.6;
   color: #1a1a1a;
   background: #05070d;
 }
 
+/* The starfield fills the window and sits behind everything. `fixed` rather
+   than `absolute` so it covers the viewport whatever the page height does,
+   and it is never a scroll target itself. main.ts keeps its backing buffer
+   matched to this box, the same way it does for the arena. */
+#backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The nav floats over the backdrop instead of taking a row above it: the
+   arena is a tall 480:800 box competing for viewport height, and a header in
+   the layout flow costs it about 40px of width on a laptop screen. */
+header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  padding: 0.75rem 1rem;
+}
+
 main {
-  max-width: 40rem;
-  margin: 0 auto;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  box-sizing: border-box;
 }
 
 a {
-  color: #0b5fff;
+  color: #8fe3ff;
 }
 
 /* The design is authored at a fixed 480x800 canvas, then scaled as one unit
@@ -25,16 +52,14 @@ a {
    container-query unit, which recomputes on any resize/orientation change
    with no JS needed.
 
-   The width budget subtracts body's own 2rem left+right padding (raw `vw`
+   Both budgets subtract main's own 1rem padding on each side. Raw `vw`
    ignores it and overflows past the padded edge on a narrow viewport ---
-   confirmed with a 390px-wide headless-Chrome iframe check). The height
-   budget subtracts a fixed allowance for that same padding plus the header
-   above #game-frame, so the box uses the space actually left over instead
-   of quietly shrinking narrower than 480px on an ordinary desktop window
-   height. */
+   confirmed with a 390px-wide headless-Chrome iframe check. Nothing else is
+   in the layout flow to subtract for, now that the nav floats over the
+   backdrop, so the arena gets the whole window height. */
 #game-frame {
   position: relative;
-  width: min(calc(100vw - 4rem), calc((100vh - 8rem) * 480 / 800));
+  width: min(calc(100vw - 2rem), calc((100vh - 2rem) * 480 / 800));
   aspect-ratio: 480 / 800;
   margin: 0 auto;
   container-type: inline-size;
@@ -56,6 +81,12 @@ a {
   height: 800px;
   background: #05070d;
   border-radius: 8px;
+  /* The page behind the arena now shows the same starfield, dimmed. A hairline
+     and a drop shadow are what keep the play field reading as a bounded box
+     rather than bleeding into its own background. */
+  box-shadow:
+    0 0 0 1px rgba(143, 227, 255, 0.22),
+    0 24px 70px -18px rgba(0, 0, 0, 0.95);
 }
 
 /* ---------- mute toggle ---------- */

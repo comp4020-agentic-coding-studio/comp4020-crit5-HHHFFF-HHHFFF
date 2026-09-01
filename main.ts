@@ -14,6 +14,7 @@ function requireElement<T extends Element>(selector: string): T {
 }
 
 const canvas = requireElement<HTMLCanvasElement>("#arena");
+const backdrop = requireElement<HTMLCanvasElement>("#backdrop");
 const selectOverlay = requireElement<HTMLDivElement>("#select");
 const shipList = requireElement<HTMLDivElement>("#ship-list");
 const shipPanel = requireElement<HTMLDivElement>("#ship-panel");
@@ -30,6 +31,15 @@ function requireContext(target: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 const ctx = requireContext(canvas);
+const backdropCtx = requireContext(backdrop);
+
+// The arena's on-screen width, which is also the texture size the page-wide
+// backdrop tiles at, and the backdrop's own CSS size. Both are read in the
+// resize callbacks below rather than per frame, so the run loop never forces
+// a layout.
+let arenaCssWidth = ARENA_WIDTH;
+let backdropCssWidth = 0;
+let backdropCssHeight = 0;
 
 // #game is scaled by CSS (styles.css, `#game-frame`/`#game`) to fit any
 // viewport --- wider on desktop, narrower on phone --- while render.ts keeps
@@ -39,6 +49,7 @@ const ctx = requireContext(canvas);
 // remaps the context so render.ts's existing draw calls land correctly.
 function fitCanvasResolution(): void {
   const rect = canvas.getBoundingClientRect();
+  arenaCssWidth = rect.width;
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, Math.round(rect.width * dpr));
   const height = Math.max(1, Math.round(rect.height * dpr));
@@ -49,6 +60,24 @@ function fitCanvasResolution(): void {
 }
 new ResizeObserver(fitCanvasResolution).observe(canvas);
 fitCanvasResolution();
+
+// The backdrop fills the viewport, so its buffer is sized in device pixels and
+// the context scaled by the ratio --- which lets render.ts draw it in CSS
+// pixels, the same units the arena width above is measured in.
+function fitBackdropResolution(): void {
+  const rect = backdrop.getBoundingClientRect();
+  backdropCssWidth = rect.width;
+  backdropCssHeight = rect.height;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (backdrop.width === width && backdrop.height === height) return;
+  backdrop.width = width;
+  backdrop.height = height;
+  backdropCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(fitBackdropResolution).observe(backdrop);
+fitBackdropResolution();
 
 installHarness();
 const input = createInput();
@@ -208,6 +237,7 @@ function frame(now: number): void {
     (state.phase === "playing" || state.phase === "boss") && (input.left || input.right || input.up || input.down);
   audio.setEngineIntensity(thrusting ? 1 : 0);
 
+  render.drawPageBackdrop(backdropCtx, state.scrollY, backdropCssWidth, backdropCssHeight, arenaCssWidth);
   render.clear(ctx, state.scrollY);
   for (const enemy of state.enemies) render.drawEnemy(ctx, enemy);
   if (state.boss) render.drawBoss(ctx, state.boss);

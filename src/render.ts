@@ -80,6 +80,84 @@ export function clear(ctx: CanvasRenderingContext2D, scrollY: number): void {
   drawBackdropPair(ctx, backgroundImage, offset);
 }
 
+// ---------- the page-wide backdrop ----------
+//
+// The arena is a fixed 480:800 shape, so on a wide desktop window it can only
+// ever be a strip down the middle. Everything either side of it used to be
+// flat black, which read as a small game on an empty page. This fills the
+// whole viewport with the same starfield, so the window reads as space with a
+// play field in it.
+//
+// It is the same art at the same texture size as the arena's own backdrop, but
+// scrolled slower: a parallax layer that is obviously a further-away sky,
+// rather than a near-miss attempt to line up with the arena, which would just
+// invite the eye to check the seam. The arena stays brighter than it (see the
+// dimming below), so the playable box is still the thing you look at.
+const PARALLAX = 0.45;
+const DIM = "rgba(5, 7, 13, 0.55)";
+
+/** One scroll period of the tiling, prerendered. Redrawn only when the
+ * viewport or the tile size changes: tiling straight onto the visible canvas
+ * would rescale a 1.7MB PNG a dozen times a frame, every frame. */
+let tileCache: HTMLCanvasElement | null = null;
+let tileCacheKey = "";
+
+function buildTile(width: number, tileW: number, tileH: number): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(width));
+  canvas.height = Math.max(1, Math.ceil(tileH * 2));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Same mirroring trick as drawBackdropPair, now in both axes: every second
+  // column is flipped horizontally and every second row vertically, so each
+  // join is an edge against its own mirror image and matches pixel for pixel.
+  // The art is not tileable, and a naive repeat seams visibly in both
+  // directions on a wide window.
+  for (let col = 0; col * tileW < canvas.width; col++) {
+    for (let row = 0; row < 2; row++) {
+      const flipX = col % 2 === 1;
+      const flipY = row === 1;
+      ctx.save();
+      ctx.translate(col * tileW + (flipX ? tileW : 0), row * tileH + (flipY ? tileH : 0));
+      ctx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+      ctx.drawImage(backgroundImage, 0, 0, tileW, tileH);
+      ctx.restore();
+    }
+  }
+
+  ctx.fillStyle = DIM;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/** Paints the scrolling starfield across the whole page, behind everything.
+ * `tileW` is the arena's on-screen width, so the texture is the same size out
+ * here as it is inside the play field. */
+export function drawPageBackdrop(
+  ctx: CanvasRenderingContext2D,
+  scrollY: number,
+  width: number,
+  height: number,
+  tileW: number,
+): void {
+  ctx.fillStyle = "#05070d";
+  ctx.fillRect(0, 0, width, height);
+  if (!ready(backgroundImage) || tileW <= 0) return;
+
+  const tileH = tileW * (ARENA_HEIGHT / ARENA_WIDTH);
+  const key = `${Math.ceil(width)}x${Math.ceil(height)}@${Math.round(tileW)}`;
+  if (key !== tileCacheKey) {
+    tileCache = buildTile(width, tileW, tileH);
+    tileCacheKey = tileCache ? key : "";
+  }
+  if (!tileCache) return;
+
+  const unit = tileCache.height;
+  const offset = (((scrollY * PARALLAX) % unit) + unit) % unit;
+  for (let y = offset - unit; y < height; y += unit) ctx.drawImage(tileCache, 0, y);
+}
+
 export function drawPlayer(ctx: CanvasRenderingContext2D, player: Player): void {
   ctx.save();
   ctx.globalAlpha = player.invulnerableMs > 0 && Math.floor(player.invulnerableMs / 80) % 2 === 0 ? 0.35 : 1;
