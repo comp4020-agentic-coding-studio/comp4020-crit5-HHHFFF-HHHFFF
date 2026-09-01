@@ -1,29 +1,31 @@
-# Crit 5 — Endless Danmaku
+# Crit 5 — Three Rounds
 
 ## What was the breakthrough that moved the work forward?
 
-Asking a passing check what it would say if I broke the thing it names.
+The breakthrough was treating a nearly finished feature as more dangerous
+than an obviously missing one. The repair-pack work looked coherent: there was
+an inventory field, a HUD count, a damage hook and tests. But its transitions
+did not match the intended rule. It stored every repair even while hurt, then
+spent stored repairs after any hit. Writing a tiny state table exposed the
+difference immediately: hurt plus pickup heals; full plus pickup stores; full
+plus hit consumes reserve; hurt plus hit loses health.
 
-`pnpm check` went red on a commit that had touched nothing it measured, and my
-first instinct was to call it noise and re-run. Measuring instead turned
-"flaky" into a number — 40 runs, 3 failures, and a cause: it sampled one frame,
-and killing a boss clears every bullet on screen. But the useful question came
-after that. I flattened the difficulty ramp to a constant and ran the check
-against a game that no longer had the thing the check is named for. It stayed
-green, 40 out of 40. It had been passing for weeks without ever testing its own
-claim. A green suite is only evidence about the checks I have actually tried to
-falsify.
+That table made the remaining work mechanical and testable. I added a focused
+check for each boundary, then an integration check that starts a repair in the
+far corner and follows the real movement, collision and application path until
+health is restored. The lesson extended an earlier breakthrough from this
+project: a passing check matters only when it senses the mechanism named on
+its label.
 
 ## What did this work change about who I want to be as a software developer?
 
-I want to be the kind of developer who distrusts agreement. Twice this week
-something looked right and wasn't. The ramp check was one. The other was a
-desktop screenshot that appeared to confirm my responsive-scaling fix while the
-CSS transform was being silently dropped as invalid — an unscaled 480×800 box
-looks exactly like a 480×800 box, so the picture agreed with me and told me
-nothing. Both times the answer was to measure the mechanism, not the
-appearance: computed style, a repeated experiment.
+I want to become a developer who reviews behaviour as transitions, not as a
+pile of plausible-looking fields and functions. Agent-produced code makes this
+especially important because it can be internally consistent while being one
+word away from the requested semantics: “always” instead of “only when full.”
 
-Working with an agent sharpens this, because it produces plausible work faster
-than I can eyeball it. The skill I want is less writing the code and more
-deciding what would prove it wrong.
+I also want verification to cross layers. Unit checks proved the inventory
+rules, the integration check proved automatic collection used production
+paths, and the rendered frame proved the new count and timers remained legible.
+None of those alone was enough. The habit I want is to ask what evidence each
+layer can provide, and what it is structurally unable to see.

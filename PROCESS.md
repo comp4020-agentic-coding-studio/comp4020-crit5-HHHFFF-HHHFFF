@@ -43,3 +43,23 @@ on purpose first — flat health table, telegraph with no delay, clone left out
 of the hit test, health ×5. The last looked green until I checked the edit had
 applied. It hadn't.
 [`361cec4`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-HHHFFF-HHHFFF/commit/361cec4)
+
+### Finishing a feature by naming its state transitions
+
+The repair feature arrived half-complete and looked plausible: packs had an
+inventory count, appeared beside health, and were consumed after damage. The
+implementation still banked every pickup, including when the ship was hurt,
+and spent a pack after every hit. That was close enough to the requested rule
+to survive an eyeball review but not the actual interaction. I wrote the four
+transitions down before changing it: a hurt ship heals on pickup; a full ship
+banks the pickup; a hit from full health spends the reserve; a hit while
+already hurt costs health normally. Focused checks now pin each boundary,
+including a full inventory that must not block an immediate heal.
+
+Repair drops also home toward the player and go through the same collision and
+pickup path as every other item. The integration check starts one in the far
+corner and proves that it moves, is collected, disappears, and restores health.
+A real browser render then caught the last presentation risk: the new `×1`
+reserve indicator and two buff timers had to coexist with six health pips,
+energy and mute controls without overlap.
+[`545aa83`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit5-HHHFFF-HHHFFF/commit/545aa83)
