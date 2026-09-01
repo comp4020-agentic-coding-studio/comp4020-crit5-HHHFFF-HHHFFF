@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addKillEnergy,
+  ARENA_HEIGHT,
+  ARENA_WIDTH,
+  type InputState,
   createPlayer,
   difficultyAt,
   OVERDRIVE_MS,
@@ -110,6 +113,39 @@ describe("a run reaches an ending", () => {
     resetGame();
   });
 
+  /** A ship that flies toward the nearest pickup and otherwise holds station.
+   *
+   * The probe used to sit perfectly still, which stopped being a useful stand-
+   * in the moment the branch shot and the multiplier became timed: a ship that
+   * never moves collects almost nothing, so it was measuring a run with no
+   * upgrades at all rather than a run played by a person. It doesn't dodge —
+   * that is what `immortal` is for — but it does the one thing every player
+   * does that decides how fast a boss dies, and it does it through the same
+   * InputState a held key produces. */
+  function collectorInput(): InputState {
+    const player = state.player;
+    if (!player) return { left: false, right: false, up: false, down: false };
+
+    let target: { x: number; y: number } | null = null;
+    let best = Number.POSITIVE_INFINITY;
+    for (const powerUp of state.powerUps) {
+      const distance = Math.hypot(powerUp.x - player.x, powerUp.y - player.y);
+      if (distance < best) {
+        best = distance;
+        target = powerUp;
+      }
+    }
+    // With nothing to fetch, drift back to the bottom middle.
+    const goalX = target ? target.x : ARENA_WIDTH / 2;
+    const goalY = target ? target.y : ARENA_HEIGHT - 90;
+    return {
+      left: player.x - goalX > 6,
+      right: goalX - player.x > 6,
+      up: player.y - goalY > 6,
+      down: goalY - player.y > 6,
+    };
+  }
+
   /** Steps until the run ends, and reports how long that took. */
   function runToEnd(immortal: boolean): { phase: string; seconds: number } {
     harness.select(0);
@@ -117,18 +153,18 @@ describe("a run reaches an ending", () => {
     const guard = (10 * 60 * 1000) / 16;
     let frames = 0;
     while (harness.state() !== "lost" && harness.state() !== "won" && frames < guard) {
-      harness.step(1, 16);
+      harness.step(1, 16, immortal ? collectorInput() : undefined);
       frames += 1;
     }
     return { phase: harness.state(), seconds: (frames * 16) / 1000 };
   }
 
   it("wins inside five minutes for a player who survives", () => {
-    // An immortal idle ship is not a person: it never dodges and never dies,
-    // so what this measures is the damage budget — how long 720 hp of boss and
-    // three meters of trash take at the base fire rate — not human skill. A
-    // real run is slower, which is why the bound is the spec's five minutes
-    // rather than the ~100s this actually takes.
+    // The probe flies to pickups but never dodges and never dies, so this
+    // measures the damage budget — 720hp of boss, three meters of trash, and
+    // whatever the gun is worth with buffs that expire — not human skill. It
+    // lands at 195-215s; the bound is the spec's five minutes because a real
+    // player, who does dodge, is slower.
     const { phase, seconds } = runToEnd(true);
 
     expect(phase).toBe("won");

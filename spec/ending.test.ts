@@ -127,11 +127,14 @@ describe("the game ends", () => {
     expect(harness.state()).toBe("playing");
 
     // killToBoss() tops lives up to survive the round clock; put them back to
-    // what a real ship carries before asking whether three hits still kill.
+    // what a real ship carries. Any repair drops collected during that real
+    // simulation are part of its survivability and each absorbs one full-
+    // health hit before the ordinary life pool starts falling.
     if (state.player) state.player.lives = state.player.maxLives;
     expect(harness.lives()).toBe(STARTING_LIVES);
 
-    for (let i = 0; i < STARTING_LIVES; i++) harness.hitPlayer();
+    const reserve = state.player?.repairPacks ?? 0;
+    for (let i = 0; i < STARTING_LIVES + reserve; i++) harness.hitPlayer();
     expect(harness.state()).toBe("lost");
   });
 });

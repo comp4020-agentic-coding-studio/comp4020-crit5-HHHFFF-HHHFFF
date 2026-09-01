@@ -234,6 +234,7 @@ function frame(now: number): void {
       audio.setMusicMode("boss");
       audio.playBossHorn();
     } else if (event.type === "pickup") audio.playPickup(event.kind === "repair");
+    else if (event.type === "repair") audio.playPickup(true);
     else if (event.type === "enrage") audio.setMusicMode("enrage");
     else if (event.type === "victory") {
       audio.setMusicMode("normal");
@@ -275,8 +276,9 @@ function frame(now: number): void {
   for (const explosion of state.explosions) render.drawExplosion(ctx, explosion);
   if (state.player) {
     render.drawPlayer(ctx, state.player);
-    render.drawLives(ctx, state.player.lives, state.player.maxLives);
+    render.drawLives(ctx, state.player);
     render.drawEnergyBar(ctx, state.player.energy, state.player.overdriveMs);
+    render.drawWeaponTimers(ctx, state.player);
   }
   if (state.phase === "playing") render.drawProgressBar(ctx, state.progress);
   // Over the HUD, under the end banners: it is a cutaway, so it covers the

@@ -6,6 +6,7 @@ import {
   advanceBossPhase,
   applyPowerUp,
   ARENA_HEIGHT,
+  ARENA_WIDTH,
   BOSS_BAR_HP,
   type Boss,
   type Bullet,
@@ -14,6 +15,16 @@ import {
   createBoss,
   createEliteWing,
   createPlayer,
+  DIAGONALS_MS,
+  isPowerUpOffscreen,
+  MAX_REPAIR_PACKS,
+  MULTIPLY_MS,
+  POWERUP_LIFE_MS,
+  REPAIR_ATTRACT_SPEED,
+  createPowerUp,
+  updatePowerUp,
+  updatePlayerFiring,
+  updateWeaponTimers,
   type Enemy,
   FORMATION_ARRIVAL_T,
   formationSize,
@@ -62,6 +73,14 @@ function bossAtRound(round: number): Boss {
   const boss = state.boss;
   if (!boss) throw new Error(`no boss at round ${round}`);
   return boss;
+}
+
+/** How many lanes the gun fires right now — 1 straight, 3 with the branch. */
+function firedLanes(player: ReturnType<typeof createPlayer>): number {
+  const bullets: Bullet[] = [];
+  player.fireCooldownMs = 0;
+  updatePlayerFiring(player, 16, bullets);
+  return bullets.length / player.weapon.multiplier;
 }
 
 /** One frame, at the fixed step the harness uses. */
@@ -503,40 +522,207 @@ describe("wings that come up from behind", () => {
   });
 });
 
-describe("the repair pickup", () => {
-  it("gives a life back, but never more than the ship carries", () => {
+describe("the repair pack", () => {
+  it("heals first, then banks at full health, and caps", () => {
     const player = createPlayer(0);
-    player.lives = 1;
+    expect(player.repairPacks).toBe(0);
 
+    player.lives -= 2;
     expect(applyPowerUp(player, "repair")).toBe(true);
-    expect(player.lives).toBe(2);
-    while (player.lives < player.maxLives) expect(applyPowerUp(player, "repair")).toBe(true);
-
-    // At full lives it does nothing and says so, which is what stops the
-    // pickup sound firing on a pickup that did nothing.
-    expect(applyPowerUp(player, "repair")).toBe(false);
+    expect(player.lives).toBe(player.maxLives - 1);
+    expect(player.repairPacks).toBe(0);
+    expect(applyPowerUp(player, "repair")).toBe(true);
     expect(player.lives).toBe(player.maxLives);
+    expect(player.repairPacks).toBe(0);
+
+    // Picked up at full health: it goes in the bag rather than being wasted,
+    // which is the whole reason it can drop at any time now.
+    expect(applyPowerUp(player, "repair")).toBe(true);
+    expect(player.repairPacks).toBe(1);
+    expect(player.lives).toBe(player.maxLives);
+
+    while (player.repairPacks < MAX_REPAIR_PACKS) expect(applyPowerUp(player, "repair")).toBe(true);
+    expect(applyPowerUp(player, "repair")).toBe(false);
+    expect(player.repairPacks).toBe(MAX_REPAIR_PACKS);
+
+    // A full bag must not block an immediately useful heal.
+    player.lives -= 1;
+    expect(applyPowerUp(player, "repair")).toBe(true);
+    expect(player.lives).toBe(player.maxLives);
+    expect(player.repairPacks).toBe(MAX_REPAIR_PACKS);
   });
 
-  it("is only ever offered to a player who has lost one", () => {
-    const healthy = new Set<string>();
-    for (let i = 0; i < 300; i++) healthy.add(randomPowerUpKind(0));
-    expect(healthy.has("repair")).toBe(false);
+  it("absorbs hits that land at full health", () => {
+    resetGame();
+    harness.select(0);
+    const player = state.player;
+    expect(player).not.toBeNull();
+    if (!player) return;
 
-    const hurt = new Set<string>();
-    for (let i = 0; i < 300; i++) hurt.add(randomPowerUpKind(2));
-    expect(hurt.has("repair")).toBe(true);
+    applyPowerUp(player, "repair");
+    applyPowerUp(player, "repair");
+    expect(player.repairPacks).toBe(2);
+
+    // The pack absorbs the hit: lives come straight back, the count drops.
+    harness.hitPlayer();
+    expect(player.lives).toBe(player.maxLives);
+    expect(player.repairPacks).toBe(1);
+
+    // The first pack restored full health, so the next hit can use the second.
+    harness.hitPlayer();
+    expect(harness.state()).toBe("playing");
+    expect(player.lives).toBe(player.maxLives);
+    expect(player.repairPacks).toBe(0);
+
+    // And with the bag empty, hits cost again.
+    harness.hitPlayer();
+    expect(player.lives).toBe(player.maxLives - 1);
   });
 
-  it("stops widening the gun once it is wide enough", () => {
+  it("does not spend reserve packs when damage starts below full health", () => {
+    resetGame();
+    harness.select(0);
+    const player = state.player;
+    expect(player).not.toBeNull();
+    if (!player) return;
+
+    applyPowerUp(player, "repair");
+    player.lives -= 1;
+    harness.hitPlayer();
+
+    expect(player.lives).toBe(player.maxLives - 2);
+    expect(player.repairPacks).toBe(1);
+  });
+
+  it("automatically attracts, collects and applies a dropped repair", () => {
+    resetGame();
+    harness.select(0);
+    const player = state.player;
+    expect(player).not.toBeNull();
+    if (!player) return;
+
+    player.lives -= 1;
+    state.powerUps.push(createPowerUp("repair", 20, 20));
+    for (let i = 0; i < 300 && state.powerUps.length > 0; i++) {
+      stepBulletsAndCollisions(0.016, 16);
+    }
+
+    expect(state.powerUps).toHaveLength(0);
+    expect(player.lives).toBe(player.maxLives);
+    expect(player.repairPacks).toBe(0);
+  });
+
+  it("stops being offered once the bag is full", () => {
     const player = createPlayer(0);
-    let applied = 0;
-    for (let i = 0; i < 20; i++) if (applyPowerUp(player, "multiply")) applied += 1;
+
+    // Bankable, so it is worth dropping even at full health.
+    const healthy = new Set<string>();
+    for (let i = 0; i < 400; i++) healthy.add(randomPowerUpKind(player));
+    expect(healthy.has("repair")).toBe(true);
+
+    player.repairPacks = MAX_REPAIR_PACKS;
+    const full = new Set<string>();
+    for (let i = 0; i < 400; i++) full.add(randomPowerUpKind(player));
+    expect(full.has("repair")).toBe(false);
+  });
+});
+
+describe("the timed weapon loans", () => {
+  it("runs the branch shot out after five seconds", () => {
+    const player = createPlayer(0);
+    expect(player.weapon.diagonalsMs).toBe(0);
+
+    applyPowerUp(player, "diagonal");
+    expect(player.weapon.diagonalsMs).toBe(DIAGONALS_MS);
+
+    // One frame short of expiry it is still up.
+    for (let elapsed = 0; elapsed < DIAGONALS_MS - 16; elapsed += 16) updateWeaponTimers(player, 16);
+    expect(player.weapon.diagonalsMs).toBeGreaterThan(0);
+    expect(firedLanes(player)).toBe(3);
+
+    updateWeaponTimers(player, 100);
+    expect(player.weapon.diagonalsMs).toBe(0);
+    expect(firedLanes(player)).toBe(1);
+  });
+
+  it("drops the multiplier back to one when its ten seconds are up", () => {
+    const player = createPlayer(0);
+    applyPowerUp(player, "multiply");
+    applyPowerUp(player, "multiply");
+    expect(player.weapon.multiplier).toBe(3);
+    expect(player.weapon.multiplierMs).toBe(MULTIPLY_MS);
+
+    for (let elapsed = 0; elapsed < MULTIPLY_MS - 16; elapsed += 16) updateWeaponTimers(player, 16);
+    expect(player.weapon.multiplier).toBe(3);
+
+    // One lane at a time, each with its own ten seconds — so a stack of three
+    // decays 3 -> 2 -> 1 rather than vanishing in one frame.
+    updateWeaponTimers(player, 100);
+    expect(player.weapon.multiplier).toBe(2);
+    expect(player.weapon.multiplierMs).toBe(MULTIPLY_MS);
+
+    for (let elapsed = 0; elapsed <= MULTIPLY_MS; elapsed += 16) updateWeaponTimers(player, 16);
+    expect(player.weapon.multiplier).toBe(1);
+    expect(player.weapon.multiplierMs).toBe(0);
+  });
+
+  it("refreshes rather than extends", () => {
+    const player = createPlayer(0);
+    applyPowerUp(player, "diagonal");
+    updateWeaponTimers(player, 3000);
+    expect(player.weapon.diagonalsMs).toBe(DIAGONALS_MS - 3000);
+
+    applyPowerUp(player, "diagonal");
+    expect(player.weapon.diagonalsMs).toBe(DIAGONALS_MS);
+  });
+
+  it("still stops widening the gun once it is wide enough", () => {
+    const player = createPlayer(0);
+    for (let i = 0; i < 20; i++) applyPowerUp(player, "multiply");
 
     // Doubling here is what let a long run reach multiplier 64 and delete the
     // bosses; the cap is the fix, and this is the check that keeps it.
     expect(player.weapon.multiplier).toBeLessThanOrEqual(6);
-    expect(applied).toBeLessThan(20);
+  });
+});
+
+describe("pickups stay in the arena", () => {
+  it("pulls repair drops into the player automatically", () => {
+    const player = createPlayer(0);
+    const powerUp = createPowerUp("repair", 20, 20);
+    const before = Math.hypot(powerUp.x - player.x, powerUp.y - player.y);
+
+    updatePowerUp(powerUp, 0.5, player);
+
+    const after = Math.hypot(powerUp.x - player.x, powerUp.y - player.y);
+    expect(after).toBeCloseTo(before - REPAIR_ATTRACT_SPEED * 0.5, 5);
+  });
+
+  it("bounce off every wall instead of leaving", () => {
+    for (const [vx, vy] of [
+      [200, 0],
+      [-200, 0],
+      [0, -200],
+      [0, 200],
+    ]) {
+      const powerUp = createPowerUp("laser", ARENA_WIDTH / 2, ARENA_HEIGHT / 2);
+      powerUp.vx = vx;
+      powerUp.vy = vy;
+      for (let i = 0; i < 400; i++) {
+        updatePowerUp(powerUp, 0.016);
+        expect(powerUp.x).toBeGreaterThanOrEqual(0);
+        expect(powerUp.x).toBeLessThanOrEqual(ARENA_WIDTH);
+        expect(powerUp.y).toBeGreaterThanOrEqual(0);
+        expect(powerUp.y).toBeLessThanOrEqual(ARENA_HEIGHT);
+      }
+    }
+  });
+
+  it("leave by timing out, so they can't pile up forever", () => {
+    const powerUp = createPowerUp("laser", 100, 100);
+    expect(isPowerUpOffscreen(powerUp)).toBe(false);
+    for (let elapsed = 0; elapsed < POWERUP_LIFE_MS; elapsed += 16) updatePowerUp(powerUp, 0.016);
+    expect(isPowerUpOffscreen(powerUp)).toBe(true);
   });
 });
 

@@ -11,6 +11,8 @@
 import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
+  DIAGONALS_MS,
+  MULTIPLY_MS,
   ROUNDS_TO_WIN,
   type Telegraph,
   type Boss,
@@ -398,6 +400,17 @@ export function drawBullet(ctx: CanvasRenderingContext2D, bullet: Bullet): void 
 }
 
 export function drawPowerUp(ctx: CanvasRenderingContext2D, powerUp: PowerUp): void {
+  // Blinks out over its last two seconds. Pickups expire on a timer now
+  // instead of leaving the arena, and one vanishing with no notice reads as a
+  // bug rather than as a decision you were too slow to make.
+  const fading = powerUp.lifeMs < 2000;
+  ctx.save();
+  if (fading) ctx.globalAlpha = Math.floor(powerUp.lifeMs / 130) % 2 === 0 ? 0.25 : 1;
+  drawPowerUpBody(ctx, powerUp);
+  ctx.restore();
+}
+
+function drawPowerUpBody(ctx: CanvasRenderingContext2D, powerUp: PowerUp): void {
   if (powerUp.kind === "repair") {
     // Drawn rather than generated: a repair pickup has to read as "not a gun"
     // instantly, and the one shape that says it without a word is a green
@@ -454,15 +467,64 @@ export function drawEnergyBar(ctx: CanvasRenderingContext2D, energy: number, ove
   ctx.fillRect(METER_X, y, METER_WIDTH * energy, 8);
 }
 
-export function drawLives(ctx: CanvasRenderingContext2D, lives: number, maxLives: number): void {
+export function drawLives(ctx: CanvasRenderingContext2D, player: Player): void {
+  const pipGap = 18;
   ctx.fillStyle = "#ff5f7e";
-  for (let i = 0; i < maxLives; i++) {
-    ctx.globalAlpha = i < lives ? 1 : 0.2;
+  for (let i = 0; i < player.maxLives; i++) {
+    ctx.globalAlpha = i < player.lives ? 1 : 0.2;
     ctx.beginPath();
-    ctx.arc(24 + i * 22, 22, 8, 0, Math.PI * 2);
+    ctx.arc(22 + i * pipGap, 22, 7, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
+
+  // The banked packs, immediately right of the lives they will become. Shown
+  // as the cross the pickup uses plus a count, because three separate crosses
+  // read as three more lives rather than as a reserve.
+  const x = 22 + player.maxLives * pipGap + 6;
+  const dim = player.repairPacks === 0;
+  ctx.save();
+  ctx.globalAlpha = dim ? 0.28 : 1;
+  ctx.fillStyle = "#3dffa8";
+  const arm = 7;
+  const thick = 2.5;
+  ctx.fillRect(x - arm, 22 - thick, arm * 2, thick * 2);
+  ctx.fillRect(x - thick, 22 - arm, thick * 2, arm * 2);
+
+  ctx.font = "600 12px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`x${player.repairPacks}`, x + 11, 23);
+  ctx.restore();
+}
+
+/** The two weapon loans, as draining bars under the energy meter. A buff that
+ * runs out with no warning reads as the gun breaking; a bar makes it a clock
+ * you can plan around — and it is the only way to know the multiplier is about
+ * to drop back to one. */
+export function drawWeaponTimers(ctx: CanvasRenderingContext2D, player: Player): void {
+  const bars = [
+    { ms: player.weapon.multiplierMs, total: MULTIPLY_MS, color: "#ffb84f", label: `x${player.weapon.multiplier}` },
+    { ms: player.weapon.diagonalsMs, total: DIAGONALS_MS, color: "#c58fff", label: "Y" },
+  ];
+  const width = 74;
+  const right = ARENA_WIDTH - 12;
+  let y = 60;
+
+  ctx.save();
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.font = "600 10px system-ui, sans-serif";
+  for (const bar of bars) {
+    if (bar.ms <= 0) continue;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+    ctx.fillRect(right - width, y, width, 4);
+    ctx.fillStyle = bar.color;
+    ctx.fillRect(right - width, y, width * (bar.ms / bar.total), 4);
+    ctx.fillText(bar.label, right - width - 6, y + 2);
+    y += 10;
+  }
+  ctx.restore();
 }
 
 export function drawEndBanner(ctx: CanvasRenderingContext2D, title: string, lines: string[]): void {

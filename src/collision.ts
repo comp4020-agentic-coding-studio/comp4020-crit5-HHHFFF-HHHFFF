@@ -25,12 +25,18 @@ const PLAYER_RADIUS = 16;
 const ENEMY_RADIUS = 14;
 const BOSS_RADIUS = 40;
 const PLAYER_INVULNERABLE_MS = 500;
-// Drops are generous for the first stretch and then settle to the old rate.
-// Flat 0.12 meant an unlucky opening left you on the base gun going into a
-// 120hp round-1 boss, which is a long fight with nothing to show for it; the
-// run is only three rounds now, so the opening is where the tools have to
-// arrive. Late drops stay rare enough to notice.
-const POWERUP_DROP_CHANCE = 0.12;
+// Drops are generous for the first stretch and then settle to a floor. An
+// unlucky opening used to leave you on the base gun going into a 120hp round-1
+// boss, which is a long fight with nothing to show for it.
+//
+// The floor went 0.12 -> 0.18 when the branch shot and the multiplier became
+// timed: 0.12 was tuned for upgrades you kept, where one lucky drop carried a
+// whole run, and a buff that expires has to be re-earned — with repairs taking
+// a share of the drops on top. Worth knowing before tuning this again: raising
+// it further barely moves anything. A collecting run measured 192-227s at 0.26
+// and 195-215s at 0.18. What decides the pace is whether the player goes and
+// fetches the drop, not how often one appears.
+const POWERUP_DROP_CHANCE = 0.18;
 const POWERUP_EARLY_BONUS = 0.12;
 const POWERUP_EASE_MS = 90000;
 /** Extra drop chance per life already lost. The early bonus has fully decayed
@@ -143,7 +149,7 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
         // drops off completely rather than boosting them.
         const missing = Math.max(0, player.maxLives - player.lives);
         if (Math.random() < powerUpDropChance(missing)) {
-          state.powerUps.push(createPowerUp(randomPowerUpKind(missing), enemy.x, enemy.y));
+          state.powerUps.push(createPowerUp(randomPowerUpKind(player), enemy.x, enemy.y));
         }
       }
       continue;
@@ -155,7 +161,9 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
 
   state.bullets = state.bullets.filter((bullet) => !isBulletOffscreen(bullet));
 
-  for (const powerUp of state.powerUps) updatePowerUp(powerUp, dtSeconds);
+  // Repair drops home in on the player; other upgrades keep their ordinary
+  // bounce. Collection still goes through the same collision and apply path.
+  for (const powerUp of state.powerUps) updatePowerUp(powerUp, dtSeconds, player);
   const remainingPowerUps = [];
   for (const powerUp of state.powerUps) {
     if (circleHit(powerUp.x, powerUp.y, 12, player.x, player.y, PLAYER_RADIUS)) {

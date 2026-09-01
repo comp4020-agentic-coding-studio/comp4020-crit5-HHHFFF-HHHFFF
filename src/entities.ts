@@ -88,11 +88,26 @@ export function shipStats(ship: ShipDef): ShipStat[] {
   ];
 }
 
+/** The gun. Two of the three upgrades are now loans rather than gifts: the
+ * branch shot and the multiplier run out, so a run's firepower is something
+ * you keep having to top up instead of a ratchet that only goes one way. The
+ * laser stays permanent --- with all three timed, a dry spell in the middle of
+ * round 3 would leave you on the bare gun against 360hp with no way back. */
 export interface WeaponState {
-  diagonals: boolean;
   laser: boolean;
+  /** > 0 while the diagonal branch shot is up. */
+  diagonalsMs: number;
   multiplier: number;
+  /** > 0 while the multiplier is up; it drops back to 1 when this runs out. */
+  multiplierMs: number;
 }
+
+export const DIAGONALS_MS = 5000;
+export const MULTIPLY_MS = 10000;
+/** Repairs collected at full health are carried, so this is a real inventory
+ * cap rather than a formality: six lives plus three banked packs is already
+ * nine mistakes, and more than that stops the loss condition mattering. */
+export const MAX_REPAIR_PACKS = 3;
 
 // The energy meter. It fills on its own so it always eventually pays out, and
 // kills fill it faster so aggression is rewarded; topping out spends the whole
@@ -115,6 +130,9 @@ export interface Player {
   invulnerableMs: number;
   energy: number; // 0..1
   overdriveMs: number; // > 0 while the free laser is running
+  /** Banked repair packs. A pickup heals first and banks only at full health;
+   * the reserve is spent automatically on a hit that starts from full. */
+  repairPacks: number;
 }
 
 // "charger" is the summoner's: it ignores the patrol band entirely and dives
@@ -226,6 +244,8 @@ export interface PowerUp {
   y: number;
   vx: number;
   vy: number;
+  /** Counts down; a pickup leaves by expiring, never by crossing an edge. */
+  lifeMs: number;
 }
 
 /** Six, not three. A run is three full boss rounds with a fifty-second
@@ -243,11 +263,12 @@ export function createPlayer(shipIndex: number): Player {
     ship,
     lives: STARTING_LIVES,
     maxLives: STARTING_LIVES,
-    weapon: { diagonals: false, laser: false, multiplier: 1 },
+    weapon: { laser: false, diagonalsMs: 0, multiplier: 1, multiplierMs: 0 },
     fireCooldownMs: 0,
     invulnerableMs: 0,
     energy: 0,
     overdriveMs: 0,
+    repairPacks: 0,
   };
 }
 
@@ -290,6 +311,26 @@ export function addKillEnergy(player: Player): void {
   player.energy = Math.min(1, player.energy + ENERGY_PER_KILL);
 }
 
+/** Runs the weapon loans down. Kept out of updatePlayerEnergy so a buff keeps
+ * expiring on frames the guns are on cooldown, the same reason the energy
+ * meter is separate. */
+export function updateWeaponTimers(player: Player, dtMs: number): void {
+  const weapon = player.weapon;
+  if (weapon.diagonalsMs > 0) weapon.diagonalsMs = Math.max(0, weapon.diagonalsMs - dtMs);
+  if (weapon.multiplierMs > 0) {
+    weapon.multiplierMs = Math.max(0, weapon.multiplierMs - dtMs);
+    if (weapon.multiplierMs === 0) {
+      // One lane at a time, each with its own ten seconds, rather than the
+      // whole stack falling off a cliff. Dropping it all at once measured out
+      // at a 420s run — past the brief's five minutes — because it halved
+      // sustained damage; stepping down keeps the pickup's promise ("this one
+      // is worth ten seconds") while leaving a stack worth building.
+      weapon.multiplier = Math.max(1, weapon.multiplier - 1);
+      if (weapon.multiplier > 1) weapon.multiplierMs = MULTIPLY_MS;
+    }
+  }
+}
+
 /** Auto-fire: nothing for the player to discover, per the no-tutorial spec line. */
 export function updatePlayerFiring(player: Player, dtMs: number, bullets: Bullet[]): void {
   const overdrive = player.overdriveMs > 0;
@@ -300,7 +341,7 @@ export function updatePlayerFiring(player: Player, dtMs: number, bullets: Bullet
   player.fireCooldownMs = player.ship.fireIntervalMs * (overdrive ? 0.5 : 1);
 
   const lanes: number[] = [0];
-  if (player.weapon.diagonals) lanes.push(-45, 45);
+  if (player.weapon.diagonalsMs > 0) lanes.push(-45, 45);
 
   for (const angleDeg of lanes) {
     const angle = (angleDeg * Math.PI) / 180;
@@ -876,8 +917,23 @@ export function isBulletOffscreen(bullet: Bullet): boolean {
   return bullet.y < -20 || bullet.y > ARENA_HEIGHT + 20 || bullet.x < -20 || bullet.x > ARENA_WIDTH + 20;
 }
 
+/** How long a pickup stays on the field.
+ *
+ * Pickups bounce off the walls now instead of sailing out of the arena, so
+ * something has to end them or they would pile up forever. A countdown does
+ * it, and it keeps the decision live: a pack in the corner is worth crossing
+ * the screen for, but not indefinitely. */
+export const POWERUP_LIFE_MS = 14000;
+const POWERUP_RADIUS = 12;
+/** Repair drops collect themselves. At this speed even a corner-to-corner
+ * drop reaches the player well before the pickup's fourteen-second expiry,
+ * while the short travel still makes the source of the heal readable. */
+export const REPAIR_ATTRACT_SPEED = 360;
+
 export function createPowerUp(kind: PowerUpKind, x: number, y: number): PowerUp {
-  return { kind, x, y, vx: 0, vy: 60 };
+  // A little sideways drift so a kill drop bounces rather than dribbling
+  // straight down one column.
+  return { kind, x, y, vx: (Math.random() - 0.5) * 70, vy: 60, lifeMs: POWERUP_LIFE_MS };
 }
 
 /** Drifts in from a random screen edge instead of dropping from a kill. */
@@ -885,20 +941,58 @@ export function createEdgePowerUp(kind: PowerUpKind): PowerUp {
   const fromLeft = Math.random() < 0.5;
   return {
     kind,
-    x: fromLeft ? -20 : ARENA_WIDTH + 20,
+    x: fromLeft ? POWERUP_RADIUS : ARENA_WIDTH - POWERUP_RADIUS,
     y: 80 + Math.random() * (UPPER_HALF - 80),
     vx: (fromLeft ? 1 : -1) * 40,
     vy: 20,
+    lifeMs: POWERUP_LIFE_MS,
   };
 }
 
-export function updatePowerUp(powerUp: PowerUp, dtSeconds: number): void {
+/** Moves a pickup and keeps it inside the arena.
+ *
+ * It used to fly off whichever edge it was heading for, which meant a drop
+ * that spawned near a wall, or an edge drift-in you didn't reach in time, was
+ * simply gone. Bouncing keeps it in play for its whole life and makes the
+ * bottom of the arena — where the player lives — reachable from any drop.
+ */
+export function updatePowerUp(powerUp: PowerUp, dtSeconds: number, player?: Player | null): void {
+  powerUp.lifeMs -= dtSeconds * 1000;
+
+  if (powerUp.kind === "repair" && player) {
+    const dx = player.x - powerUp.x;
+    const dy = player.y - powerUp.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > 0) {
+      powerUp.vx = (dx / distance) * REPAIR_ATTRACT_SPEED;
+      powerUp.vy = (dy / distance) * REPAIR_ATTRACT_SPEED;
+    }
+  }
+
   powerUp.x += powerUp.vx * dtSeconds;
   powerUp.y += powerUp.vy * dtSeconds;
+
+  if (powerUp.x < POWERUP_RADIUS) {
+    powerUp.x = POWERUP_RADIUS;
+    powerUp.vx = Math.abs(powerUp.vx);
+  } else if (powerUp.x > ARENA_WIDTH - POWERUP_RADIUS) {
+    powerUp.x = ARENA_WIDTH - POWERUP_RADIUS;
+    powerUp.vx = -Math.abs(powerUp.vx);
+  }
+
+  if (powerUp.y < POWERUP_RADIUS) {
+    powerUp.y = POWERUP_RADIUS;
+    powerUp.vy = Math.abs(powerUp.vy);
+  } else if (powerUp.y > ARENA_HEIGHT - POWERUP_RADIUS) {
+    powerUp.y = ARENA_HEIGHT - POWERUP_RADIUS;
+    // Loses a little on the floor rather than pinging back to the ceiling.
+    powerUp.vy = -Math.abs(powerUp.vy) * 0.7;
+  }
 }
 
+/** Gone by timing out, not by leaving: nothing exits the arena any more. */
 export function isPowerUpOffscreen(powerUp: PowerUp): boolean {
-  return powerUp.y > ARENA_HEIGHT + 20 || powerUp.x < -40 || powerUp.x > ARENA_WIDTH + 40;
+  return powerUp.lifeMs <= 0;
 }
 
 /** The gun widens one lane at a time, and stops.
@@ -917,15 +1011,35 @@ const MULTIPLIER_CAP = 6;
  * that isn't a gun upgrade. Returns whether it actually did anything, so the
  * caller can tell a real pickup from a wasted one. */
 export function applyPowerUp(player: Player, kind: PowerUpKind): boolean {
-  if (kind === "laser") player.weapon.laser = true;
-  else if (kind === "diagonal") player.weapon.diagonals = true;
-  else if (kind === "multiply") {
-    if (player.weapon.multiplier >= MULTIPLIER_CAP) return false;
-    player.weapon.multiplier += 1;
+  if (kind === "laser") {
+    player.weapon.laser = true;
+  } else if (kind === "diagonal") {
+    // Refreshes rather than extends: two in quick succession shouldn't bank
+    // ten seconds of branch shot.
+    player.weapon.diagonalsMs = DIAGONALS_MS;
+  } else if (kind === "multiply") {
+    player.weapon.multiplier = Math.min(MULTIPLIER_CAP, player.weapon.multiplier + 1);
+    player.weapon.multiplierMs = MULTIPLY_MS;
   } else if (kind === "repair") {
-    if (player.lives >= player.maxLives) return false;
-    player.lives += 1;
+    // Health first. Only a pack collected while already full becomes reserve;
+    // a hurt player should see the life bar recover, not an inventory number
+    // rise while an immediately useful heal sits unused.
+    if (player.lives < player.maxLives) {
+      player.lives += 1;
+      return true;
+    }
+    if (player.repairPacks >= MAX_REPAIR_PACKS) return false;
+    player.repairPacks += 1;
   }
+  return true;
+}
+
+/** Spends one banked pack to undo a hit. `hitPlayer` only calls this when the
+ * hit began at full health; below full, damage continues to cost health. */
+export function consumeRepairPack(player: Player): boolean {
+  if (player.repairPacks <= 0 || player.lives >= player.maxLives) return false;
+  player.repairPacks -= 1;
+  player.lives += 1;
   return true;
 }
 
@@ -939,9 +1053,15 @@ const WEAPON_POWERUP_KINDS: PowerUpKind[] = ["laser", "diagonal", "multiply"];
  * carrying: a flat 30% was too thin from round 2 on, where the fights are
  * longer and a player arrives already down. By three lives lost, over half of
  * what drops is a repair. */
-export function randomPowerUpKind(livesMissing = 0): PowerUpKind {
-  const repairShare = Math.min(0.55, 0.22 + 0.13 * livesMissing);
-  if (livesMissing > 0 && Math.random() < repairShare) return "repair";
+export function randomPowerUpKind(player?: Player | null): PowerUpKind {
+  // Now that packs are carried, a repair is worth dropping even at full
+  // health — it goes in the bag. It stops being offered only when the bag is
+  // full *and* health is full, which is the one case where picking it up would
+  // do nothing.
+  if (player && (player.lives < player.maxLives || player.repairPacks < MAX_REPAIR_PACKS)) {
+    const missing = Math.max(0, player.maxLives - player.lives);
+    if (Math.random() < Math.min(0.55, 0.15 + 0.13 * missing)) return "repair";
+  }
   return WEAPON_POWERUP_KINDS[Math.floor(Math.random() * WEAPON_POWERUP_KINDS.length)];
 }
 

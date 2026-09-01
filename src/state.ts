@@ -12,6 +12,7 @@
 
 import {
   addKillEnergy,
+  consumeRepairPack,
   BACKGROUND_SPEED,
   type Boss,
   type Bullet,
@@ -42,7 +43,8 @@ export type GameEvent =
   | { type: "boss" }
   | { type: "enrage" }
   | { type: "victory" }
-  | { type: "pickup"; kind: PowerUpKind };
+  | { type: "pickup"; kind: PowerUpKind }
+  | { type: "repair" };
 
 export interface GameState {
   phase: GamePhase;
@@ -167,8 +169,15 @@ export function hitPlayer(): void {
   // Terminal phases are terminal in both directions: a bullet still in the air
   // when the last boss dies must not turn a win into a loss.
   if (!state.player || state.phase === "lost" || state.phase === "won") return;
+  const wasFull = state.player.lives >= state.player.maxLives;
   state.player.lives -= 1;
   pushEvent({ type: "hit" });
+
+  // Reserve packs absorb damage taken from full health. Once the player is
+  // already hurt, subsequent hits cost health normally; incoming repair drops
+  // refill that health before any new packs can be stored.
+  if (wasFull && consumeRepairPack(state.player)) pushEvent({ type: "repair" });
+
   if (state.player.lives <= 0) {
     state.phase = "lost";
   }

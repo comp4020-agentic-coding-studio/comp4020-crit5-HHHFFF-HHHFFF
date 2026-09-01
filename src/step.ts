@@ -24,6 +24,7 @@ import {
   randomPowerUpKind,
   updateBoss,
   updatePlayerEnergy,
+  updateWeaponTimers,
   updatePlayerFiring,
   updatePlayerMovement,
 } from "./entities";
@@ -146,8 +147,7 @@ function maybeDriftPowerUp(dtMs: number): void {
     // was called bare, which meant a drift-in could never be a repair — half
     // the pickups in the game were silently excluded from the one kind a
     // struggling player needs.
-    const missing = state.player ? Math.max(0, state.player.maxLives - state.player.lives) : 0;
-    state.powerUps.push(createEdgePowerUp(randomPowerUpKind(missing)));
+    state.powerUps.push(createEdgePowerUp(randomPowerUpKind(state.player)));
   }
 }
 
@@ -165,6 +165,7 @@ export function stepWorld(dtMs: number, input: InputState = IDLE_INPUT): void {
     if (player) {
       updatePlayerMovement(player, input, dtSeconds);
       updatePlayerEnergy(player, dtMs);
+      updateWeaponTimers(player, dtMs);
       const bulletsBefore = state.bullets.length;
       updatePlayerFiring(player, dtMs, state.bullets);
       if (state.bullets.length > bulletsBefore) pushEvent({ type: "shoot" });
