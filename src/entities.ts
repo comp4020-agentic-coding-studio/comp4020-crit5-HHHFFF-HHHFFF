@@ -164,12 +164,20 @@ export interface Enemy {
 // fires on its own logic and carries one signature mechanic.
 export type BossArchetype = "summoner" | "berserker" | "twin";
 
-/** A lane the summoner has marked but not yet charged down. The warning is the
- * mechanic --- a dive out of nowhere is unfair, the same dive announced a
- * second early is a dodge you either make or don't. */
-export interface BossTelegraph {
+/** A path something is about to travel, drawn before it travels it. The
+ * warning is the mechanic --- an arrival out of nowhere is unfair, the same
+ * arrival announced a second early is a dodge you either make or don't.
+ *
+ * Used by two owners: the boss marks lanes it is about to send chargers down,
+ * and step.ts marks the column an elite wing is about to rise through when it
+ * enters from the bottom. Bottom entries are the ones that come up behind the
+ * player, which is exactly the arrival that needs announcing. `rising` only
+ * changes which end of the beam is bright. */
+export interface Telegraph {
   x: number;
   msLeft: number;
+  totalMs: number;
+  rising: boolean;
 }
 
 export interface Boss {
@@ -189,7 +197,7 @@ export interface Boss {
   enraged: boolean;
   enrageMs: number; // > 0 while the enrage flare plays
   flashMs: number; // > 0 just after a bar breaks
-  telegraphs: BossTelegraph[];
+  telegraphs: Telegraph[];
   summonMs: number;
   /** The twin's copy of itself, mirrored across the arena and firing in
    * lockstep. Shares `hp`: shooting either body drains the same bar, so
@@ -220,14 +228,21 @@ export interface PowerUp {
   vy: number;
 }
 
+/** Six, not three. A run is three full boss rounds with a fifty-second
+ * approach each, so a life is a much larger fraction of an hour's practice
+ * than it was when a round was twenty seconds — and losing the run to one
+ * mistimed dodge in round 3 costs the player everything the brief wants them
+ * to reach: the ending. */
+export const STARTING_LIVES = 6;
+
 export function createPlayer(shipIndex: number): Player {
   const ship = SHIPS[shipIndex] ?? SHIPS[0];
   return {
     x: ARENA_WIDTH / 2,
     y: ARENA_HEIGHT - 90,
     ship,
-    lives: 3,
-    maxLives: 3,
+    lives: STARTING_LIVES,
+    maxLives: STARTING_LIVES,
     weapon: { diagonals: false, laser: false, multiplier: 1 },
     fireCooldownMs: 0,
     invulnerableMs: 0,
@@ -346,7 +361,10 @@ export function createNormalEnemy(difficulty: number): Enemy {
     speed: (55 + Math.random() * 45) * Math.min(2.2, difficulty),
     hp: 2,
     fireCooldownMs: (700 + Math.random() * 1200) / difficulty,
-    fireIntervalMs: (1700 + Math.random() * 1800) / Math.min(3, difficulty),
+    // Both the base and the ceiling on the difficulty divisor were raised with
+    // the spray thresholds above: a patroller now fires a little slower and
+    // stops getting faster sooner.
+    fireIntervalMs: (2100 + Math.random() * 1900) / Math.min(2.2, difficulty),
     dirChangeMs: 0,
   };
   retarget(enemy);
@@ -530,8 +548,11 @@ export function updateEnemy(
       const vy = 180 * Math.min(2, difficulty);
       const vx = ((playerX - enemy.x) / ARENA_HEIGHT) * vy;
       // Density climbs in steps as well as in rate: late runs get sprays, not
-      // just faster singles.
-      const shots = difficulty >= 3 ? 3 : difficulty >= 2 ? 2 : 1;
+      // just faster singles. The thresholds moved out (2/3 -> 2.5/4) once
+      // elite wings started firing alongside the patrollers and a run got long
+      // enough to reach difficulty 6: three sprays per patroller plus a wing
+      // plus a boss was a screen with no gaps in it, which isn't difficulty.
+      const shots = difficulty >= 4 ? 3 : difficulty >= 2.5 ? 2 : 1;
       for (let i = 0; i < shots; i++) {
         const spread = (i - (shots - 1) / 2) * 34;
         bullets.push({
@@ -773,8 +794,8 @@ function fireVolley(boss: Boss, bullets: Bullet[], playerX: number, playerY: num
  * whole point and is what spec/boss.test.ts pins down. */
 function updateSummons(boss: Boss, dtMs: number, enemies: Enemy[]): void {
   if (boss.telegraphs.length > 0) {
-    const due: BossTelegraph[] = [];
-    const pending: BossTelegraph[] = [];
+    const due: Telegraph[] = [];
+    const pending: Telegraph[] = [];
     for (const lane of boss.telegraphs) {
       lane.msLeft -= dtMs;
       (lane.msLeft <= 0 ? due : pending).push(lane);
@@ -790,7 +811,7 @@ function updateSummons(boss: Boss, dtMs: number, enemies: Enemy[]): void {
   boss.summonMs = SUMMON_INTERVAL_MS;
   for (let i = 0; i < 2; i++) {
     const x = PATROL_MARGIN + Math.random() * (ARENA_WIDTH - PATROL_MARGIN * 2);
-    boss.telegraphs.push({ x, msLeft: TELEGRAPH_MS });
+    boss.telegraphs.push({ x, msLeft: TELEGRAPH_MS, totalMs: TELEGRAPH_MS, rising: false });
   }
 }
 

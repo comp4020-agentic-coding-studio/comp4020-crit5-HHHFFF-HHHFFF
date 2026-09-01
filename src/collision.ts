@@ -89,7 +89,9 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
 
   // player bullets vs boss --- and vs its clone, which shares the same hp, so
   // a player who picks the "wrong" one of the two bodies still gets paid.
-  const boss = state.boss;
+  // Not during the arrival cutaway: it is inert for those five seconds, so it
+  // can't be chipped down behind its own entrance.
+  const boss = state.introMs > 0 ? null : state.boss;
   if (boss) {
     for (const bullet of state.bullets) {
       if (bullet.owner !== "player") continue;

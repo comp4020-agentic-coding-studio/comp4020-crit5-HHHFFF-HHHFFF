@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { ROUNDS_TO_WIN } from "../src/entities";
+import { ROUNDS_TO_WIN, STARTING_LIVES } from "../src/entities";
 import { installHarness } from "../src/harness";
 import { registerKill, resetGame, ROUND_MIN_MS, state } from "../src/state";
 
@@ -46,12 +46,18 @@ describe("the game ends", () => {
     resetGame();
   });
 
-  it("reaches 'lost' after three hits", () => {
+  it("reaches 'lost' when the last life goes, and not before", () => {
     harness.select(0);
     expect(harness.state()).toBe("playing");
-    harness.hitPlayer();
-    harness.hitPlayer();
-    expect(harness.state()).toBe("playing");
+    expect(harness.lives()).toBe(STARTING_LIVES);
+
+    // Counted off STARTING_LIVES rather than a literal, so raising the ship's
+    // lives from three to six moves this test with it instead of leaving it
+    // asserting a number the game stopped using.
+    for (let i = 1; i < STARTING_LIVES; i++) {
+      harness.hitPlayer();
+      expect(harness.state()).toBe("playing");
+    }
     harness.hitPlayer();
     expect(harness.state()).toBe("lost");
     expect(harness.lives()).toBe(0);
@@ -96,9 +102,7 @@ describe("the game ends", () => {
 
     // A stray bullet resolving on the same frame as the kill shot must not
     // turn a win into a loss.
-    harness.hitPlayer();
-    harness.hitPlayer();
-    harness.hitPlayer();
+    for (let i = 0; i < STARTING_LIVES; i++) harness.hitPlayer();
     expect(harness.state()).toBe("won");
   });
 
@@ -125,11 +129,9 @@ describe("the game ends", () => {
     // killToBoss() tops lives up to survive the round clock; put them back to
     // what a real ship carries before asking whether three hits still kill.
     if (state.player) state.player.lives = state.player.maxLives;
-    expect(harness.lives()).toBe(3);
+    expect(harness.lives()).toBe(STARTING_LIVES);
 
-    harness.hitPlayer();
-    harness.hitPlayer();
-    harness.hitPlayer();
+    for (let i = 0; i < STARTING_LIVES; i++) harness.hitPlayer();
     expect(harness.state()).toBe("lost");
   });
 });

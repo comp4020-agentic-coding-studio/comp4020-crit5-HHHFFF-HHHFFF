@@ -4,7 +4,7 @@
 // collision and a real animation frame call — so a passing test proves the
 // real path works, not a parallel test-only one.
 
-import { advanceBossPhase, bossBarIndex, OVERDRIVE_MS } from "./entities";
+import { advanceBossPhase, applyPowerUp, bossBarIndex, OVERDRIVE_MS } from "./entities";
 import { defeatBoss, hitPlayer, registerKill, selectShip, state } from "./state";
 import { resetSpawnTimers, stepWorld } from "./step";
 
@@ -21,6 +21,9 @@ export interface Harness {
    * collision.ts runs when a player bullet lands, so a bar break, an enrage or
    * a split reached this way is the real one, not a flag set by hand. */
   damageBoss(amount: number): void;
+  /** Applies a repair pickup, the same call the power-up makes. Lets a driven
+   * page survive long enough to reach a boss without a test-only life setter. */
+  repair(): boolean;
   lives(): number;
   bossesDowned(): number;
   bossHp(): number;
@@ -71,6 +74,7 @@ export function installHarness(): Harness {
       state.boss.hp -= amount;
       advanceBossPhase(state.boss);
     },
+    repair: () => (state.player ? applyPowerUp(state.player, "repair") : false),
     lives: () => state.player?.lives ?? 0,
     bossesDowned: () => state.bossesDowned,
     bossHp: () => state.boss?.maxHp ?? 0,

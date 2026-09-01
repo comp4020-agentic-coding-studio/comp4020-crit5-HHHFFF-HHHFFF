@@ -11,6 +11,8 @@
 import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
+  ROUNDS_TO_WIN,
+  type Telegraph,
   type Boss,
   type Bullet,
   type Enemy,
@@ -199,28 +201,104 @@ export function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
 /** The summoner's charge lanes, drawn before anything else in the arena so a
  * warning never sits on top of a bullet you are trying to read. It brightens
  * as it runs out, which is the only cue for *when*, not just where. */
-export function drawTelegraphs(ctx: CanvasRenderingContext2D, boss: Boss): void {
-  for (const lane of boss.telegraphs) {
-    const urgency = 1 - Math.max(0, Math.min(1, lane.msLeft / 1100));
+export function drawTelegraphs(ctx: CanvasRenderingContext2D, telegraphs: Telegraph[]): void {
+  for (const lane of telegraphs) {
+    const urgency = 1 - Math.max(0, Math.min(1, lane.msLeft / lane.totalMs));
     const width = 30 + urgency * 8;
+    // Bright at the end the thing is coming *from*, so the beam reads as a
+    // direction and not just a marked column: chargers fall, wings rise.
+    const [top, bottom] = lane.rising
+      ? ["rgba(120, 220, 255, 0)", "#78dcff"]
+      : ["#ff5f7e", "rgba(255, 95, 126, 0)"];
     ctx.save();
     ctx.globalAlpha = 0.12 + urgency * 0.3;
     const gradient = ctx.createLinearGradient(0, 0, 0, ARENA_HEIGHT);
-    gradient.addColorStop(0, "#ff5f7e");
-    gradient.addColorStop(1, "rgba(255, 95, 126, 0)");
+    gradient.addColorStop(0, top);
+    gradient.addColorStop(1, bottom);
     ctx.fillStyle = gradient;
     ctx.fillRect(lane.x - width / 2, 0, width, ARENA_HEIGHT);
 
     ctx.globalAlpha = 0.35 + urgency * 0.55;
-    ctx.strokeStyle = "#ff8fa6";
+    ctx.strokeStyle = lane.rising ? "#a8ecff" : "#ff8fa6";
     ctx.lineWidth = 1.5;
     ctx.setLineDash([10, 8]);
+    // The dashes crawl the way the arrival will travel.
+    ctx.lineDashOffset = (lane.rising ? 1 : -1) * urgency * 40;
     ctx.beginPath();
     ctx.moveTo(lane.x, 0);
     ctx.lineTo(lane.x, ARENA_HEIGHT);
     ctx.stroke();
+
+    // An arrowhead at the leading edge, pointing the way in.
+    const tipY = lane.rising ? ARENA_HEIGHT - 30 - urgency * 60 : 30 + urgency * 60;
+    const dir = lane.rising ? -1 : 1;
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.5 + urgency * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(lane.x, tipY + dir * 14);
+    ctx.lineTo(lane.x - 9, tipY - dir * 6);
+    ctx.lineTo(lane.x + 9, tipY - dir * 6);
+    ctx.closePath();
+    ctx.fillStyle = lane.rising ? "#a8ecff" : "#ff8fa6";
+    ctx.fill();
     ctx.restore();
   }
+}
+
+/** The boss's arrival: two shutters open out of the centre line, the boss
+ * rises into the gap, and the round is named. Five seconds, and the whole
+ * fight is frozen for them --- the point is that you look at what turned up
+ * rather than fighting it before you have seen it. */
+export function drawBossIntro(ctx: CanvasRenderingContext2D, boss: Boss, msLeft: number, totalMs: number): void {
+  const t = 1 - Math.max(0, Math.min(1, msLeft / totalMs));
+  // open (0-0.2) -> hold (0.2-0.75) -> close (0.75-1)
+  const open = t < 0.2 ? t / 0.2 : t > 0.75 ? 1 - (t - 0.75) / 0.25 : 1;
+  const eased = open * open * (3 - 2 * open);
+  const half = eased * 132;
+  const midY = ARENA_HEIGHT / 2;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(5, 7, 13, 0.82)";
+  ctx.fillRect(0, midY - half, ARENA_WIDTH, half * 2);
+
+  ctx.strokeStyle = boss.enraged ? "#ff2d55" : "#8fe3ff";
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = eased;
+  ctx.beginPath();
+  ctx.moveTo(0, midY - half);
+  ctx.lineTo(ARENA_WIDTH, midY - half);
+  ctx.moveTo(0, midY + half);
+  ctx.lineTo(ARENA_WIDTH, midY + half);
+  ctx.stroke();
+
+  if (eased > 0.55) {
+    const reveal = (eased - 0.55) / 0.45;
+    ctx.globalAlpha = reveal;
+    // Slides in from the left as it scales up, so the panel has movement in it
+    // rather than being a still frame held for five seconds.
+    const slide = (1 - reveal) * 90;
+    drawSprite(ctx, BOSS_SPRITE, ARENA_WIDTH / 2 - slide, midY - 16, 108 * reveal + 40, 108 * reveal + 40);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f4f6ff";
+    ctx.font = "600 20px system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(ARCHETYPE_LABEL[boss.archetype], ARENA_WIDTH / 2, midY + 62);
+
+    ctx.fillStyle = "#ff9ab4";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText(`ROUND ${boss.round} OF ${ROUNDS_TO_WIN}`, ARENA_WIDTH / 2, midY + 86);
+
+    // A countdown bar, so five seconds reads as "nearly over" rather than as
+    // the game having stopped responding.
+    const barW = 150;
+    ctx.globalAlpha = reveal * 0.8;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillRect(ARENA_WIDTH / 2 - barW / 2, midY + 100, barW, 3);
+    ctx.fillStyle = "#8fe3ff";
+    ctx.fillRect(ARENA_WIDTH / 2 - barW / 2, midY + 100, barW * (1 - t), 3);
+  }
+  ctx.restore();
 }
 
 function drawBossBody(ctx: CanvasRenderingContext2D, boss: Boss, x: number, y: number, ghost: boolean): void {

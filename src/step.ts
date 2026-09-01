@@ -12,10 +12,14 @@
 // harness.ts, and therefore the spec tests) stays DOM-free.
 
 import {
+  ARENA_WIDTH,
   createEdgePowerUp,
   createEliteWing,
   createNormalEnemy,
+  type FormationEntry,
+  type FormationShape,
   type InputState,
+  type Telegraph,
   randomFormation,
   randomPowerUpKind,
   updateBoss,
@@ -36,6 +40,67 @@ export function resetSpawnTimers(): void {
   normalSpawnMs = 800;
   eventSpawnMs = 6000;
   edgePowerUpMs = 6000;
+  pendingWings = [];
+}
+
+/** A wing that has been announced but hasn't arrived yet. */
+interface PendingWing {
+  shape: FormationShape;
+  entry: FormationEntry;
+  difficulty: number;
+  msLeft: number;
+}
+
+let pendingWings: PendingWing[] = [];
+
+export const WING_WARNING_MS = 1200;
+
+/** Announces a wing, then spawns it.
+ *
+ * Only bottom entries get the warning, and they get it because they are the
+ * one arrival that comes up from behind the player --- everything else enters
+ * from in front of you, where the ships themselves are the warning. The beam
+ * marks the column the wing will rise through, so the dodge is available
+ * before the wing is.
+ */
+function queueEliteWing(difficulty: number): void {
+  const { shape, entry } = randomFormation();
+  if (entry !== "bottom") {
+    for (const elite of createEliteWing(shape, entry, difficulty)) state.enemies.push(elite);
+    return;
+  }
+  const wing = createEliteWing(shape, entry, difficulty);
+  // The wing is built now so the warning can be drawn at the exact column it
+  // will use, then thrown away and rebuilt on arrival with the same hold.
+  const holdX = wing[0]?.formHoldX ?? ARENA_WIDTH / 2;
+  state.telegraphs.push({ x: holdX, msLeft: WING_WARNING_MS, totalMs: WING_WARNING_MS, rising: true });
+  pendingWings.push({ shape, entry, difficulty, msLeft: WING_WARNING_MS });
+}
+
+function updatePendingWings(dtMs: number): void {
+  if (pendingWings.length === 0) return;
+  const stillWaiting: PendingWing[] = [];
+  for (const pending of pendingWings) {
+    pending.msLeft -= dtMs;
+    if (pending.msLeft > 0) {
+      stillWaiting.push(pending);
+      continue;
+    }
+    for (const elite of createEliteWing(pending.shape, pending.entry, pending.difficulty)) {
+      state.enemies.push(elite);
+    }
+  }
+  pendingWings = stillWaiting;
+}
+
+function updateTelegraphs(dtMs: number): void {
+  if (state.telegraphs.length === 0) return;
+  const live: Telegraph[] = [];
+  for (const lane of state.telegraphs) {
+    lane.msLeft -= dtMs;
+    if (lane.msLeft > 0) live.push(lane);
+  }
+  state.telegraphs = live;
 }
 
 function maybeSpawnEnemies(dtMs: number): void {
@@ -43,7 +108,10 @@ function maybeSpawnEnemies(dtMs: number): void {
   const difficulty = currentDifficulty();
 
   normalSpawnMs -= dtMs;
-  const cap = Math.min(14, 4 + Math.floor(difficulty * 2));
+  // Lowered along with the per-enemy fire rate: the patrol band shares the
+  // screen with elite wings now, and fourteen patrollers plus a wing left no
+  // lane open.
+  const cap = Math.min(10, 3 + Math.floor(difficulty * 1.5));
   if (normalSpawnMs <= 0 && state.enemies.filter((enemy) => enemy.kind === "normal").length < cap) {
     normalSpawnMs = (900 + Math.random() * 500) / Math.min(3.5, difficulty);
     state.enemies.push(createNormalEnemy(difficulty));
@@ -57,8 +125,7 @@ function maybeSpawnEnemies(dtMs: number): void {
   eventSpawnMs -= dtMs;
   if (eventSpawnMs <= 0) {
     eventSpawnMs = (7000 + Math.random() * 4000) / Math.min(2.5, difficulty);
-    const { shape, entry } = randomFormation();
-    for (const elite of createEliteWing(shape, entry, difficulty)) state.enemies.push(elite);
+    queueEliteWing(difficulty);
   }
 }
 
@@ -96,11 +163,19 @@ export function stepWorld(dtMs: number, input: InputState = IDLE_INPUT): void {
       if (state.bullets.length > bulletsBefore) pushEvent({ type: "shoot" });
     }
 
+    updateTelegraphs(dtMs);
+    updatePendingWings(dtMs);
     maybeSpawnEnemies(dtMs);
     maybeDriftPowerUp(dtMs);
     stepEnemyMovement(dtSeconds, dtMs);
 
-    if (state.phase === "boss" && state.boss && player) {
+    // The boss's arrival cutaway. The clock, the player and the backdrop keep
+    // running through it — you can fly, and you should, because the five
+    // seconds are there to reposition — but the boss itself is inert and
+    // collision.ts leaves it alone, so nothing resolves during a cutscene.
+    if (state.introMs > 0) state.introMs = Math.max(0, state.introMs - dtMs);
+
+    if (state.phase === "boss" && state.boss && player && state.introMs === 0) {
       // The enemies array goes in as well as the bullets: the summoner's
       // charge lanes spawn ships, not shots.
       updateBoss(state.boss, dtSeconds, dtMs, state.bullets, state.enemies, player.x, player.y);

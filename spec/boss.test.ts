@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { stepBulletsAndCollisions } from "../src/collision";
 import { installHarness } from "../src/harness";
-import { registerKill, resetGame, ROUND_MIN_MS, state } from "../src/state";
+import { BOSS_INTRO_MS, registerKill, resetGame, ROUND_MIN_MS, state } from "../src/state";
 import {
   advanceBossPhase,
   applyPowerUp,
@@ -54,6 +54,9 @@ function bossAtRound(round: number): Boss {
     while (state.phase === "playing" && guard++ < 200) registerKill();
     if (r < round) harness.defeatBoss();
   }
+  // Fly out the arrival cutaway: the boss is inert and untouchable during it,
+  // so a test that skipped it would be shooting at nothing.
+  for (let i = 0; i < Math.ceil(BOSS_INTRO_MS / 16) + 2; i++) harness.step(1, 16);
   const boss = state.boss;
   if (!boss) throw new Error(`no boss at round ${round}`);
   return boss;
@@ -359,6 +362,107 @@ describe("the approach to a boss", () => {
   });
 });
 
+describe("the boss's arrival", () => {
+  /** Runs a round up to the moment the boss lands. */
+  function atArrival(): void {
+    resetGame();
+    harness.select(0);
+    if (state.player) state.player.lives = 100_000;
+    const frames = Math.ceil(ROUND_MIN_MS / 16) + 2;
+    for (let i = 0; i < frames && state.phase === "playing"; i++) harness.step(1, 16);
+    let guard = 0;
+    while (state.phase === "playing" && guard++ < 200) registerKill();
+  }
+
+  it("freezes the fight for the cutaway, then starts it", () => {
+    atArrival();
+    expect(state.phase).toBe("boss");
+    // Not exactly BOSS_INTRO_MS: the frame that starts the boss also ticks it
+    // down once before it returns.
+    expect(state.introMs).toBeGreaterThan(BOSS_INTRO_MS - 100);
+    expect(state.introMs).toBeLessThanOrEqual(BOSS_INTRO_MS);
+
+    const boss = state.boss;
+    expect(boss).not.toBeNull();
+    if (!boss) return;
+    const startedAt = { x: boss.x, hp: boss.hp };
+
+    // Through the cutaway: the boss doesn't move, doesn't fire, and — the part
+    // that would otherwise let a player delete a bar behind the curtain —
+    // doesn't take damage either.
+    for (let i = 0; i < Math.ceil(BOSS_INTRO_MS / 16) - 4; i++) {
+      state.bullets.push({
+        owner: "player",
+        x: boss.x,
+        y: boss.y,
+        vx: 0,
+        vy: 0,
+        width: 8,
+        height: 8,
+        damage: 5,
+      });
+      harness.step(1, 16);
+    }
+    expect(state.introMs).toBeGreaterThan(0);
+    expect(boss.x).toBe(startedAt.x);
+    expect(boss.hp).toBe(startedAt.hp);
+    expect(state.bullets.some((bullet) => bullet.owner === "enemy")).toBe(false);
+
+    // And once it is over, the fight is a fight.
+    for (let i = 0; i < 200; i++) harness.step(1, 16);
+    expect(state.introMs).toBe(0);
+    expect(boss.x).not.toBe(startedAt.x);
+  });
+});
+
+describe("wings that come up from behind", () => {
+  it("announce the column before rising through it", () => {
+    // Bottom entries are the only arrival that starts behind the player, so
+    // they are the only one that gets a warning. Driven straight at the
+    // spawner rather than waiting for a random bottom entry to come up.
+    // Entry edges are picked at random, so a bottom entry may not come up
+    // inside any one round. Retried across rounds rather than waited for in
+    // one, which would make the check a coin flip — the exact failure this
+    // suite already learned about once.
+    let sawWarningFirst = false;
+
+    for (let attempt = 0; attempt < 12 && !sawWarningFirst; attempt++) {
+      resetGame();
+      harness.select(0);
+      if (state.player) state.player.lives = 100_000;
+
+      let guard = 0;
+      while (!sawWarningFirst && guard++ < 4000 && state.phase === "playing") {
+        harness.step(1, 16);
+        if (!state.telegraphs.some((lane) => lane.rising)) continue;
+
+        // Everything already on screen when the beam lights. Anything that
+        // rises from the bottom *after* this point, before the beam clears,
+        // is an arrival that outran its own warning.
+        const before = new Set(state.enemies);
+        let framesWarned = 0;
+        while (state.telegraphs.some((lane) => lane.rising) && state.phase === "playing") {
+          for (const enemy of state.enemies) {
+            if (enemy.kind !== "elite" || enemy.formEntry !== "bottom") continue;
+            expect(before.has(enemy)).toBe(true);
+          }
+          harness.step(1, 16);
+          framesWarned += 1;
+        }
+        expect(framesWarned * 16).toBeGreaterThan(600);
+
+        const arrived = state.enemies.filter(
+          (enemy) => enemy.kind === "elite" && enemy.formEntry === "bottom" && !before.has(enemy),
+        );
+        expect(arrived.length).toBeGreaterThan(0);
+        sawWarningFirst = true;
+      }
+    }
+
+    expect(sawWarningFirst).toBe(true);
+  });
+});
+
 describe("the repair pickup", () => {
   it("gives a life back, but never more than the ship carries", () => {
     const player = createPlayer(0);
@@ -366,8 +470,7 @@ describe("the repair pickup", () => {
 
     expect(applyPowerUp(player, "repair")).toBe(true);
     expect(player.lives).toBe(2);
-    expect(applyPowerUp(player, "repair")).toBe(true);
-    expect(player.lives).toBe(3);
+    while (player.lives < player.maxLives) expect(applyPowerUp(player, "repair")).toBe(true);
 
     // At full lives it does nothing and says so, which is what stops the
     // pickup sound firing on a pickup that did nothing.

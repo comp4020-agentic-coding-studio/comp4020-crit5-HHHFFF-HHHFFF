@@ -4,7 +4,7 @@ import { installHarness } from "./src/harness";
 import * as render from "./src/render";
 import * as audio from "./src/audio";
 import { createInput } from "./src/input";
-import { resetGame, selectShip, state } from "./src/state";
+import { BOSS_INTRO_MS, resetGame, selectShip, state } from "./src/state";
 import { resetSpawnTimers, stepWorld } from "./src/step";
 
 function requireElement<T extends Element>(selector: string): T {
@@ -259,7 +259,10 @@ function frame(now: number): void {
   // your own bullets could bury the one orb you had to dodge. Player fire goes
   // underneath everything it might hide; enemy fire goes on top of everything
   // except your ship, which you also always need to see.
-  if (state.boss) render.drawTelegraphs(ctx, state.boss);
+  // Both owners' warnings, under everything else in the arena: the boss's
+  // charge lanes and the columns elite wings are about to rise through.
+  if (state.boss) render.drawTelegraphs(ctx, state.boss.telegraphs);
+  render.drawTelegraphs(ctx, state.telegraphs);
   for (const bullet of state.bullets) {
     if (bullet.owner === "player") render.drawBullet(ctx, bullet);
   }
@@ -276,6 +279,11 @@ function frame(now: number): void {
     render.drawEnergyBar(ctx, state.player.energy, state.player.overdriveMs);
   }
   if (state.phase === "playing") render.drawProgressBar(ctx, state.progress);
+  // Over the HUD, under the end banners: it is a cutaway, so it covers the
+  // fight it is introducing.
+  if (state.boss && state.introMs > 0) {
+    render.drawBossIntro(ctx, state.boss, state.introMs, BOSS_INTRO_MS);
+  }
   if (state.phase === "lost") {
     render.drawEndBanner(ctx, "Destroyed", [
       formatDuration(state.elapsedMs),

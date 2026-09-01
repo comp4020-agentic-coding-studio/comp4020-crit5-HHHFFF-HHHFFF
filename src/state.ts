@@ -25,6 +25,7 @@ import {
   type PowerUp,
   type PowerUpKind,
   ROUNDS_TO_WIN,
+  type Telegraph,
 } from "./entities";
 
 export type GamePhase = "select" | "playing" | "boss" | "lost" | "won";
@@ -56,7 +57,16 @@ export interface GameState {
   bossesDowned: number;
   scrollY: number;
   events: GameEvent[];
+  /** Counts down through the boss's arrival cutaway. While it is running the
+   * boss neither moves, fires nor takes damage, and the player can still fly —
+   * five seconds to reposition and read who turned up. */
+  introMs: number;
+  /** Paths about to be flown, drawn before they are. Owned here rather than by
+   * the boss because elite wings rising from the bottom edge use them too. */
+  telegraphs: Telegraph[];
 }
+
+export const BOSS_INTRO_MS = 5000;
 
 const KILLS_TO_BOSS = 10;
 /** A boss needs the meter full *and* this long since the round started. The
@@ -80,6 +90,8 @@ function createInitialState(): GameState {
     bossesDowned: 0,
     scrollY: 0,
     events: [],
+    introMs: 0,
+    telegraphs: [],
   };
 }
 
@@ -175,6 +187,8 @@ function startBossPhase(): void {
   state.enemies = [];
   state.bullets = [];
   state.boss = createBoss(state.bossesDowned + 1);
+  state.telegraphs = [];
+  state.introMs = BOSS_INTRO_MS;
   pushEvent({ type: "boss" });
 }
 
@@ -186,6 +200,8 @@ export function defeatBoss(): void {
   state.boss = null;
   state.bullets = [];
   state.enemies = [];
+  state.telegraphs = [];
+  state.introMs = 0;
   state.bossesDowned += 1;
   kills = 0;
   roundMs = 0;
