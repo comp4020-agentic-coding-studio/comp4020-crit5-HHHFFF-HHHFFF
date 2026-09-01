@@ -23,7 +23,32 @@ which deliverable applies. Read both before you plan or build.
   add a small seam on `window` that steps the same instance the visitor is
   watching (e.g. `window.harness.doThing()`), not a parallel implementation.
 - If you write your own check, prove it would have failed on the commit before
-  the bug it targets --- a check that has never been red isn't a check.
+  the bug it targets --- a check that has never been red isn't a check. And see
+  below: watch it go red for the reason on its label.
+
+### Verify a check by breaking what it names
+
+"A check that has never been red isn't a check" has a second half. A check on
+this repo's endless mode --- *throws more enemy fire late in a run than early*
+--- stayed green 40 runs out of 40 with the difficulty ramp flattened to
+`return 1`. It had never sensed the ramp: late runs are busier because
+power-ups accumulate, so kills come faster and boss rounds come round more
+often. It had been passing for weeks while measuring something else.
+
+So before trusting a check, break the mechanism it claims to measure and
+confirm it fails. If it stays green, either the assertion or the name is wrong
+--- fix whichever it is, and make the test say which of the two it now does.
+
+Two traps from the same failure:
+
+- **Don't sample a stochastic simulation at one instant.** That check counted
+  the enemy bullets alive in a single frame, in a world where a boss fight
+  suppresses spawns and killing a boss clears the field --- a legitimate 0 on a
+  busy run, red about 7% of the time. Count over a window instead, and start
+  both windows from steady state so you aren't just measuring warm-up.
+- **Quantify a flake before fixing it.** Run the measurement 40 times and read
+  the distribution. Whether a red is noise, and how much margin the fix buys,
+  are both numbers; guessing at them costs more than measuring.
 
 ## Seeing the rendered page on this machine
 
@@ -102,6 +127,21 @@ below it moves. To swap one line of text for another in place, stack both in
 one CSS grid cell and hide the inactive one with `visibility` plus
 `aria-hidden`; the container then stays as tall as the taller line and nothing
 reflows.
+
+### An invalid value drops the whole declaration, and `none` can look right
+
+`transform: scale(calc(100cqw / 480))` is invalid --- dividing a `<length>` by
+a bare number gives a `<length>`, and `scale()` takes a `<number>`. CSS drops
+the *entire* declaration rather than part of it, so the element fell back to
+`transform: none` and nothing scaled, at any window size. Screenshots agreed
+with the fix for two rounds, because an unscaled 480x800 box looks exactly like
+a 480x800 box. Divide a length by a length (`calc(100cqw / 480px)`) when you
+need a unitless number.
+
+A screenshot shows that *some* layout happened, not that yours did. When a fix
+turns on one declaration, read that declaration back ---
+`getComputedStyle(el).transform` returning `none` settled this in one line,
+after two screenshots had said the opposite.
 
 ### A state that is fine and a state that is fine can still hide a bug
 
