@@ -16,11 +16,38 @@ a {
   color: #0b5fff;
 }
 
-#game {
+/* The design is authored at a fixed 480x800 canvas, then scaled as one unit
+   to fit whatever viewport it's in --- wider/taller on a desktop window,
+   fills the width on a narrow phone --- rather than reflowing the canvas
+   and the ship-select overlay independently. #game-frame reserves the
+   actual on-screen box (so the page layout around it, e.g. the header,
+   is correct); #game stays at its 480x800 design size and is scaled via a
+   container-query unit, which recomputes on any resize/orientation change
+   with no JS needed.
+
+   The width budget subtracts body's own 2rem left+right padding (raw `vw`
+   ignores it and overflows past the padded edge on a narrow viewport ---
+   confirmed with a 390px-wide headless-Chrome iframe check). The height
+   budget subtracts a fixed allowance for that same padding plus the header
+   above #game-frame, so the box uses the space actually left over instead
+   of quietly shrinking narrower than 480px on an ordinary desktop window
+   height. */
+#game-frame {
   position: relative;
+  width: min(calc(100vw - 4rem), calc((100vh - 8rem) * 480 / 800));
+  aspect-ratio: 480 / 800;
+  margin: 0 auto;
+  container-type: inline-size;
+}
+
+#game {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 480px;
   height: 800px;
-  margin: 0 auto;
+  transform: scale(calc(100cqw / 480px));
+  transform-origin: top left;
 }
 
 #arena {

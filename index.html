@@ -27,31 +27,33 @@
       </nav>
     </header>
     <main>
-      <div id="game">
-        <canvas id="arena" aria-label="Space shooter arena"></canvas>
-        <button id="mute" type="button" aria-pressed="false" aria-label="Mute sound">🔊</button>
-        <div id="select">
-          <h1>Choose your ship</h1>
-          <div id="select-body">
-            <div id="ship-list"></div>
-            <div id="ship-panel">
-              <p id="panel-name"></p>
-              <p id="panel-blurb"></p>
-              <div id="panel-stats"></div>
+      <div id="game-frame">
+        <div id="game">
+          <canvas id="arena" aria-label="Space shooter arena"></canvas>
+          <button id="mute" type="button" aria-pressed="false" aria-label="Mute sound">🔊</button>
+          <div id="select">
+            <h1>Choose your ship</h1>
+            <div id="select-body">
+              <div id="ship-list"></div>
+              <div id="ship-panel">
+                <p id="panel-name"></p>
+                <p id="panel-blurb"></p>
+                <div id="panel-stats"></div>
+              </div>
             </div>
-          </div>
-          <!--
-            A control affordance, not a tutorial: four key caps that light up
-            when the real keys go down, and cycle on their own until they do.
-            aria-hidden because "W A S D" read aloud is noise, and because the
-            brief's no-instructions rule means the controls are meant to be
-            found by trying them.
-          -->
-          <div id="keys" aria-hidden="true">
-            <span class="key" data-dir="up">W</span>
-            <span class="key" data-dir="left">A</span>
-            <span class="key" data-dir="down">S</span>
-            <span class="key" data-dir="right">D</span>
+            <!--
+              A control affordance, not a tutorial: four key caps that light up
+              when the real keys go down, and cycle on their own until they do.
+              aria-hidden because "W A S D" read aloud is noise, and because the
+              brief's no-instructions rule means the controls are meant to be
+              found by trying them.
+            -->
+            <div id="keys" aria-hidden="true">
+              <span class="key" data-dir="up">W</span>
+              <span class="key" data-dir="left">A</span>
+              <span class="key" data-dir="down">S</span>
+              <span class="key" data-dir="right">D</span>
+            </div>
           </div>
         </div>
       </div>

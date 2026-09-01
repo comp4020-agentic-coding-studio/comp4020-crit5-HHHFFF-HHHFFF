@@ -23,9 +23,6 @@ const panelStats = requireElement<HTMLDivElement>("#panel-stats");
 const keys = requireElement<HTMLDivElement>("#keys");
 const muteButton = requireElement<HTMLButtonElement>("#mute");
 
-canvas.width = ARENA_WIDTH;
-canvas.height = ARENA_HEIGHT;
-
 function requireContext(target: HTMLCanvasElement): CanvasRenderingContext2D {
   const context = target.getContext("2d");
   if (!context) throw new Error("2d canvas context unavailable");
@@ -33,6 +30,25 @@ function requireContext(target: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 const ctx = requireContext(canvas);
+
+// #game is scaled by CSS (styles.css, `#game-frame`/`#game`) to fit any
+// viewport --- wider on desktop, narrower on phone --- while render.ts keeps
+// drawing in fixed 0..ARENA_WIDTH/0..ARENA_HEIGHT coordinates. This keeps the
+// backing buffer matched to the canvas's *actual* on-screen pixel size (so a
+// bigger on-screen canvas isn't a blurry upscale of a 480x800 raster) and
+// remaps the context so render.ts's existing draw calls land correctly.
+function fitCanvasResolution(): void {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width === width && canvas.height === height) return;
+  canvas.width = width;
+  canvas.height = height;
+  ctx.setTransform(width / ARENA_WIDTH, 0, 0, height / ARENA_HEIGHT, 0, 0);
+}
+new ResizeObserver(fitCanvasResolution).observe(canvas);
+fitCanvasResolution();
 
 installHarness();
 const input = createInput();
