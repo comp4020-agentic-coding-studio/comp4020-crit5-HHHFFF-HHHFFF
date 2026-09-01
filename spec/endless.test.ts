@@ -8,7 +8,7 @@ import {
   updatePlayerEnergy,
 } from "../src/entities";
 import { installHarness } from "../src/harness";
-import { resetGame, state } from "../src/state";
+import { currentDifficulty, resetGame, state } from "../src/state";
 
 (globalThis as { window?: unknown }).window = globalThis;
 
@@ -31,6 +31,37 @@ function keepAlive(): void {
   if (state.player) state.player.lives = 100_000;
 }
 
+/** Counts every enemy bullet that appears over a window of play.
+ *
+ * Deliberately not `probe().enemyBullets`, which is how many happen to be
+ * alive in the one frame you look. Two things make that a coin flip rather
+ * than a measurement: a boss fight suppresses normal spawns entirely
+ * (`maybeSpawnEnemies` returns early unless the phase is "playing"), and
+ * `defeatBoss()` clears `state.bullets` outright — so a snapshot that lands
+ * just after a boss dies legitimately reads 0 on a run that is in fact far
+ * busier than it was at 20 seconds. Measured over 40 runs the snapshot
+ * version failed 3 times (late 0 vs early 8, late 0 vs early 6, late 12 vs
+ * early 14): a ~7% flake, which is what turned `pnpm check` red on a commit
+ * that had changed nothing it measures.
+ *
+ * Counting distinct bullets across a window averages those boss phases in
+ * instead of landing inside one. Identity works as the key because bullets
+ * are freshly constructed objects — entities.ts pools nothing. */
+function enemyFireOver(seconds: number): number {
+  const seen = new WeakSet<object>();
+  let total = 0;
+  const frames = Math.round((seconds * 1000) / 16);
+  for (let i = 0; i < frames; i++) {
+    harness.step(1, 16);
+    for (const bullet of state.bullets) {
+      if (bullet.owner !== "enemy" || seen.has(bullet)) continue;
+      seen.add(bullet);
+      total += 1;
+    }
+  }
+  return total;
+}
+
 // The endless mode's whole promise is that standing still gets harder, and
 // none of that is visible to a rendered check: headless Chrome runs roughly
 // one animation frame per second of virtual time, so "is it busier at three
@@ -46,17 +77,45 @@ describe("the endless ramp", () => {
     expect(difficultyAt(RAMP_MS * 9)).toBe(10);
   });
 
-  it("throws more enemy fire late in a run than early", () => {
+  // The ramp's own sensor. `currentDifficulty()` is `difficultyAt(elapsedMs)`,
+  // so what this pins down that the pure-function test above doesn't is the
+  // wiring: that a run's clock actually advances and actually feeds the ramp.
+  // Flattening difficultyAt to `return 1` turns this red (4.0 -> 1.0) and,
+  // notably, turns nothing else in this file red — see the fire test below.
+  it("climbs with the run clock, so standing still gets harder", () => {
     harness.select(0);
     keepAlive();
-    play(20);
-    const early = harness.probe().enemyBullets;
+    play(120);
+
+    const elapsed = harness.probe().elapsedMs;
+    expect(elapsed).toBeGreaterThan(115_000);
+    expect(currentDifficulty()).toBeCloseTo(difficultyAt(elapsed), 10);
+    expect(currentDifficulty()).toBeGreaterThan(3.5);
+  });
+
+  // Deliberately NOT sold as a ramp check, because it isn't one: flattening
+  // difficultyAt to a constant leaves it green 40/40. A late run is busier
+  // than an early one mostly because power-ups have accumulated, so the player
+  // kills faster, so boss rounds come round more often — and bosses fire
+  // densely. What this does sense is a run going quiet: spawning breaking,
+  // fire stopping, the field emptying out and never refilling.
+  //
+  // Both windows are 60s and both start from steady state (the first one after
+  // a 30s warm-up), because the earlier version compared a 20s window on a
+  // still-filling field against a 20s window 130s in, which mostly measured
+  // how long an empty arena takes to fill. Over 40 runs: early 172-295, late
+  // 495-1261, closest margin 200.
+  it("keeps a late run busier than an early one", () => {
+    harness.select(0);
+    keepAlive();
+    play(30);
+    const early = enemyFireOver(60);
 
     resetGame();
     harness.select(0);
     keepAlive();
-    play(150);
-    const late = harness.probe().enemyBullets;
+    play(300);
+    const late = enemyFireOver(60);
 
     expect(early).toBeGreaterThan(0);
     expect(late).toBeGreaterThan(early);
