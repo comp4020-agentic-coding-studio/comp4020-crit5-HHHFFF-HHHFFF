@@ -1,17 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { stepBulletsAndCollisions } from "../src/collision";
 import { installHarness } from "../src/harness";
-import { registerKill, resetGame, state } from "../src/state";
+import { registerKill, resetGame, ROUND_MIN_MS, state } from "../src/state";
 import {
   advanceBossPhase,
+  applyPowerUp,
   ARENA_HEIGHT,
   BOSS_BAR_HP,
   type Boss,
   type Bullet,
   bossBarIndex,
+  bossPatterns,
   createBoss,
+  createEliteWing,
+  createPlayer,
   type Enemy,
+  formationSize,
   isEnemyOffscreen,
+  randomPowerUpKind,
   ROUNDS_TO_WIN,
   updateBoss,
   updateEnemy,
@@ -38,7 +44,14 @@ function bossAtRound(round: number): Boss {
   resetGame();
   harness.select(0);
   for (let r = 1; r <= round; r++) {
-    for (let i = 0; i < KILLS_TO_BOSS; i++) registerKill();
+    // A boss needs the round clock as well as the meter, so serve the wait by
+    // stepping real frames — lives topped up, since the point is the boss, not
+    // whether an idle ship survives fifty seconds.
+    if (state.player) state.player.lives = 100_000;
+    const frames = Math.ceil(ROUND_MIN_MS / 16) + 2;
+    for (let i = 0; i < frames && state.phase === "playing"; i++) harness.step(1, 16);
+    let guard = 0;
+    while (state.phase === "playing" && guard++ < 200) registerKill();
     if (r < round) harness.defeatBoss();
   }
   const boss = state.boss;
@@ -82,16 +95,37 @@ describe("the three boss rounds", () => {
     expect(totals.length).toBe(ROUNDS_TO_WIN);
   });
 
-  it("gives each round a different opening volley", () => {
-    const volleys = [1, 2, 3].map((round) => {
-      const boss = createBoss(round);
-      const bullets: Bullet[] = [];
-      step(boss, bullets, []);
-      return bullets.length;
-    });
+  // Each round keeps the last round's whole repertoire and adds one to it, so
+  // the earlier list is always a prefix of the later one. Opening volleys are
+  // deliberately the *same* shape now — round 2 inherits round 1's aimed fan
+  // and opens with it — so what distinguishes the rounds is how many shapes
+  // they cycle through, not the first one you see.
+  it("inherits every earlier round's attacks and adds one", () => {
+    expect(bossPatterns(1)).toEqual(["aimed"]);
+    expect(bossPatterns(2)).toEqual(["aimed", "spiral"]);
+    expect(bossPatterns(3)).toEqual(["aimed", "spiral", "pulse"]);
 
-    expect(new Set(volleys).size).toBe(volleys.length);
-    for (const count of volleys) expect(count).toBeGreaterThan(0);
+    for (const round of [2, 3]) {
+      expect(bossPatterns(round).slice(0, round - 1)).toEqual(bossPatterns(round - 1));
+    }
+  });
+
+  it("cycles more distinct volleys the later the round", () => {
+    const distinctVolleys = (round: number): number => {
+      const boss = createBoss(round);
+      const sizes = new Set<number>();
+      for (let i = 0; i < 6; i++) {
+        const bullets: Bullet[] = [];
+        boss.patternCooldownMs = 0;
+        step(boss, bullets, []);
+        expect(bullets.length).toBeGreaterThan(0);
+        sizes.add(bullets.length);
+      }
+      return sizes.size;
+    };
+
+    expect(distinctVolleys(1)).toBe(1);
+    expect(distinctVolleys(3)).toBeGreaterThan(distinctVolleys(1));
   });
 });
 
@@ -141,14 +175,22 @@ describe("round 3: the twin", () => {
     expect(boss.clone).not.toBeNull();
 
     // Mirrored across the arena, and firing in lockstep: a volley from a split
-    // twin is twice the volley of an unsplit one.
-    const solo = createBoss(3);
-    const soloVolley: Bullet[] = [];
-    step(solo, soloVolley, []);
-
+    // twin is exactly twice the volley of the same boss unsplit. Compared
+    // against itself with the clone taken away rather than against a fresh
+    // round-3 boss, because by now this one is also enraged and one volley
+    // into its cycle — a fresh one would differ for reasons that have nothing
+    // to do with the split.
     const pairVolley: Bullet[] = [];
     boss.patternCooldownMs = 0;
     step(boss, pairVolley, []);
+
+    const soloVolley: Bullet[] = [];
+    boss.clone = null;
+    boss.volley -= 1; // repeat the same pattern in the cycle
+    boss.patternCooldownMs = 0;
+    step(boss, soloVolley, []);
+
+    expect(soloVolley.length).toBeGreaterThan(0);
     expect(pairVolley.length).toBe(soloVolley.length * 2);
   });
 
@@ -225,6 +267,133 @@ describe("round 1: the summoner", () => {
     for (let elapsed = 0; elapsed < 6000; elapsed += 16) updateEnemy(dive, 0.016, 16, [], PLAYER_X, 1);
     expect(dive.y).toBeGreaterThan(ARENA_HEIGHT);
     expect(isEnemyOffscreen(dive)).toBe(true);
+  });
+});
+
+// The approach to a boss is a section of the run in its own right now, not a
+// countdown you outrun by killing fast.
+describe("the approach to a boss", () => {
+  it("holds the boss back until the round clock is served, meter or not", () => {
+    resetGame();
+    harness.select(0);
+    if (state.player) state.player.lives = 100_000;
+
+    // Meter full immediately: without the clock gate this alone used to summon
+    // a boss about twenty seconds in.
+    for (let i = 0; i < 40; i++) registerKill();
+    expect(harness.state()).toBe("playing");
+
+    // And it stays held right up to the line.
+    const justShort = Math.floor((ROUND_MIN_MS - 1000) / 16);
+    for (let i = 0; i < justShort; i++) harness.step(1, 16);
+    expect(harness.state()).toBe("playing");
+
+    for (let i = 0; i < 100; i++) harness.step(1, 16);
+    expect(harness.state()).toBe("boss");
+  });
+
+  it("shows whichever requirement is further off, so the meter can't sit full", () => {
+    resetGame();
+    harness.select(0);
+    if (state.player) state.player.lives = 100_000;
+    for (let i = 0; i < 40; i++) registerKill();
+
+    // Kills are done; the clock isn't, so the bar has to read the clock.
+    harness.step(Math.floor(ROUND_MIN_MS / 2 / 16), 16);
+    expect(state.progress).toBeGreaterThan(0.3);
+    expect(state.progress).toBeLessThan(0.8);
+  });
+
+  it("sends elite wings in formation, from more than one edge", () => {
+    const shapes = new Set<string>();
+    const entries = new Set<string>();
+
+    // Sampled as the round runs, not at the end of it: a boss phase clears the
+    // arena, so a single look after ROUND_MIN_MS finds nothing at all.
+    for (let attempt = 0; attempt < 12; attempt++) {
+      resetGame();
+      harness.select(0);
+      if (state.player) state.player.lives = 100_000;
+      const frames = Math.floor(ROUND_MIN_MS / 16);
+      for (let i = 0; i < frames && state.phase === "playing"; i++) {
+        harness.step(1, 16);
+        for (const enemy of state.enemies) {
+          if (enemy.kind !== "elite") continue;
+          if (enemy.formShape) shapes.add(enemy.formShape);
+          if (enemy.formEntry) entries.add(enemy.formEntry);
+        }
+      }
+    }
+    expect(shapes.size).toBeGreaterThan(0);
+
+    // Squads used to arc up from the bottom and only from the bottom.
+    expect(shapes.size).toBeGreaterThan(1);
+    expect(entries.size).toBeGreaterThan(1);
+  });
+
+  it("holds a wing's shape while it flies", () => {
+    const wing = createEliteWing("ring", "top", 1);
+    expect(wing.length).toBe(formationSize("ring"));
+
+    // Fly it to the middle of its hold, where the shape is supposed to be a
+    // shape rather than a line of ships still arriving.
+    for (let i = 0; i < 320; i++) {
+      for (const elite of wing) updateEnemy(elite, 0.016, 16, [], PLAYER_X, 1);
+    }
+
+    const cx = wing.reduce((sum, e) => sum + e.x, 0) / wing.length;
+    const cy = wing.reduce((sum, e) => sum + e.y, 0) / wing.length;
+    const radii = wing.map((e) => Math.hypot(e.x - cx, e.y - cy));
+    // Every member the same distance from the centre is what "ring" means.
+    expect(Math.max(...radii) - Math.min(...radii)).toBeLessThan(12);
+    for (const elite of wing) expect(elite.y).toBeGreaterThan(0);
+  });
+
+  it("retires a wing once it has flown through", () => {
+    const wing = createEliteWing("line", "left", 1);
+    expect(wing.every((elite) => !isEnemyOffscreen(elite))).toBe(true);
+    for (let i = 0; i < 900; i++) {
+      for (const elite of wing) updateEnemy(elite, 0.016, 16, [], PLAYER_X, 1);
+    }
+    expect(wing.every((elite) => isEnemyOffscreen(elite))).toBe(true);
+  });
+});
+
+describe("the repair pickup", () => {
+  it("gives a life back, but never more than the ship carries", () => {
+    const player = createPlayer(0);
+    player.lives = 1;
+
+    expect(applyPowerUp(player, "repair")).toBe(true);
+    expect(player.lives).toBe(2);
+    expect(applyPowerUp(player, "repair")).toBe(true);
+    expect(player.lives).toBe(3);
+
+    // At full lives it does nothing and says so, which is what stops the
+    // pickup sound firing on a pickup that did nothing.
+    expect(applyPowerUp(player, "repair")).toBe(false);
+    expect(player.lives).toBe(player.maxLives);
+  });
+
+  it("is only ever offered to a player who has lost one", () => {
+    const healthy = new Set<string>();
+    for (let i = 0; i < 300; i++) healthy.add(randomPowerUpKind(0));
+    expect(healthy.has("repair")).toBe(false);
+
+    const hurt = new Set<string>();
+    for (let i = 0; i < 300; i++) hurt.add(randomPowerUpKind(2));
+    expect(hurt.has("repair")).toBe(true);
+  });
+
+  it("stops widening the gun once it is wide enough", () => {
+    const player = createPlayer(0);
+    let applied = 0;
+    for (let i = 0; i < 20; i++) if (applyPowerUp(player, "multiply")) applied += 1;
+
+    // Doubling here is what let a long run reach multiplier 64 and delete the
+    // bosses; the cap is the fix, and this is the check that keeps it.
+    expect(player.weapon.multiplier).toBeLessThanOrEqual(6);
+    expect(applied).toBeLessThan(20);
   });
 });
 

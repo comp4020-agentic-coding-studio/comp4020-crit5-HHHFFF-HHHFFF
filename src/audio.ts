@@ -214,6 +214,34 @@ export function currentMusicMode(): MusicMode {
   return musicMode;
 }
 
+/** Two low blasts as a boss arrives. The arrangement swap underneath it only
+ * lands at the top of the next bar, up to a couple of seconds away, so this is
+ * what makes the change audible *now* --- the music then confirms it. */
+export function playBossHorn(): void {
+  if (!ctx || !sfxGain) return;
+  const time = ctx.currentTime;
+  for (const [i, note] of [33, 36].entries()) {
+    const freq = midiToFreq(note);
+    playTone("sawtooth", freq, freq * 0.97, time + i * 0.26, 0.4, 0.5, sfxGain);
+  }
+  playNoiseBurst("lowpass", 900, 60, time, 0.55, 0.35, sfxGain);
+}
+
+/** Picking something up. Repair gets its own shape --- a rising pair rather
+ * than a single blip --- because it is the only pickup that isn't a gun. */
+export function playPickup(repair: boolean): void {
+  if (!ctx || !sfxGain) return;
+  const time = ctx.currentTime;
+  if (repair) {
+    for (const [i, offset] of [7, 12, 16].entries()) {
+      const freq = midiToFreq(LEAD_ROOT + offset);
+      playTone("triangle", freq, freq, time + i * 0.07, 0.2, 0.3, sfxGain);
+    }
+    return;
+  }
+  playTone("square", midiToFreq(LEAD_ROOT + 7), midiToFreq(LEAD_ROOT + 14), time, 0.14, 0.22, sfxGain);
+}
+
 /** A rising arpeggio for clearing the third boss --- the run's only win, so
  * it gets the one sound that is not a weapon or an explosion. */
 export function playVictory(): void {

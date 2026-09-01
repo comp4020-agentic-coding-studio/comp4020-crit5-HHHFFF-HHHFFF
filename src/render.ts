@@ -320,6 +320,27 @@ export function drawBullet(ctx: CanvasRenderingContext2D, bullet: Bullet): void 
 }
 
 export function drawPowerUp(ctx: CanvasRenderingContext2D, powerUp: PowerUp): void {
+  if (powerUp.kind === "repair") {
+    // Drawn rather than generated: a repair pickup has to read as "not a gun"
+    // instantly, and the one shape that says it without a word is a green
+    // cross. The other three are weapon art and stay weapon art.
+    const { x, y } = powerUp;
+    ctx.save();
+    ctx.fillStyle = "rgba(80, 255, 170, 0.18)";
+    ctx.beginPath();
+    ctx.arc(x, y, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#3dffa8";
+    ctx.shadowColor = "#3dffa8";
+    ctx.shadowBlur = 12;
+    const arm = 11;
+    const thick = 4;
+    ctx.fillRect(x - arm, y - thick, arm * 2, thick * 2);
+    ctx.fillRect(x - thick, y - arm, thick * 2, arm * 2);
+    ctx.restore();
+    return;
+  }
   drawSprite(ctx, POWERUP_SPRITES[powerUp.kind], powerUp.x, powerUp.y, 30, 30);
 }
 

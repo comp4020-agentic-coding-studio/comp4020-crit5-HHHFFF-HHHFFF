@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ROUNDS_TO_WIN } from "../src/entities";
 import { installHarness } from "../src/harness";
-import { registerKill, resetGame, state } from "../src/state";
+import { registerKill, resetGame, ROUND_MIN_MS, state } from "../src/state";
 
 // installHarness() assigns window.harness — vitest's default environment is
 // node (this repo's other spec files reach for jsdom explicitly rather than
@@ -10,10 +10,20 @@ import { registerKill, resetGame, state } from "../src/state";
 
 const harness = installHarness();
 
-const KILLS_TO_BOSS = 10;
-
+/** Gets the run to its next boss.
+ *
+ * A boss now needs the kill meter full *and* ROUND_MIN_MS on the round clock,
+ * so filling the meter is no longer enough on its own — the wait is a real
+ * part of a round and the test has to serve it. Time is passed by stepping the
+ * same frame function the game runs, with lives topped up so the wait itself
+ * can't end the run; whatever the sim kills along the way counts, and any
+ * shortfall is made up with direct registerKill() calls. */
 function killToBoss(): void {
-  for (let i = 0; i < KILLS_TO_BOSS; i++) registerKill();
+  if (state.player) state.player.lives = 100_000;
+  const frames = Math.ceil(ROUND_MIN_MS / 16) + 2;
+  for (let i = 0; i < frames && harness.state() === "playing"; i++) harness.step(1, 16);
+  let guard = 0;
+  while (harness.state() === "playing" && guard++ < 200) registerKill();
 }
 
 // Two spec lines, one file: "it can be lost ... play ends somewhere — a win, a
@@ -111,6 +121,11 @@ describe("the game ends", () => {
     killToBoss();
     harness.defeatBoss();
     expect(harness.state()).toBe("playing");
+
+    // killToBoss() tops lives up to survive the round clock; put them back to
+    // what a real ship carries before asking whether three hits still kill.
+    if (state.player) state.player.lives = state.player.maxLives;
+    expect(harness.lives()).toBe(3);
 
     harness.hitPlayer();
     harness.hitPlayer();

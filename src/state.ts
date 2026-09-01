@@ -23,6 +23,7 @@ import {
   type ExplosionKind,
   type Player,
   type PowerUp,
+  type PowerUpKind,
   ROUNDS_TO_WIN,
 } from "./entities";
 
@@ -39,7 +40,8 @@ export type GameEvent =
   | { type: "explosion"; kind: ExplosionKind }
   | { type: "boss" }
   | { type: "enrage" }
-  | { type: "victory" };
+  | { type: "victory" }
+  | { type: "pickup"; kind: PowerUpKind };
 
 export interface GameState {
   phase: GamePhase;
@@ -57,6 +59,12 @@ export interface GameState {
 }
 
 const KILLS_TO_BOSS = 10;
+/** A boss needs the meter full *and* this long since the round started. The
+ * meter alone filled in about twenty seconds, which meant the elite wings
+ * barely got a wave in before the arena cleared for a boss; the run is short
+ * enough that the approach to a boss has to be a section of its own rather
+ * than a countdown you outrun. */
+export const ROUND_MIN_MS = 50000;
 
 function createInitialState(): GameState {
   return {
@@ -84,12 +92,15 @@ export function pushEvent(event: GameEvent): void {
 // from it) — summing 0.1 ten times in floating point lands on
 // 0.9999999999999999, one float epsilon short of the boss threshold.
 let kills = 0;
+/** Milliseconds since the current round's play phase began. */
+let roundMs = 0;
 
 export const state: GameState = createInitialState();
 
 export function resetGame(): void {
   Object.assign(state, createInitialState());
   kills = 0;
+  roundMs = 0;
 }
 
 export function selectShip(shipIndex: number): void {
@@ -104,6 +115,7 @@ export function selectShip(shipIndex: number): void {
   state.bossesDowned = 0;
   state.phase = "playing";
   kills = 0;
+  roundMs = 0;
 }
 
 /** How hard the run currently is. Everything that scales reads this rather
@@ -116,6 +128,20 @@ export function currentDifficulty(): number {
  * play is actually happening, so a paused select screen doesn't bank time. */
 export function tickClock(dtMs: number): void {
   state.elapsedMs += dtMs;
+  if (state.phase !== "playing") return;
+  roundMs += dtMs;
+  syncProgress();
+  maybeStartBoss();
+}
+
+/** The meter shows whichever requirement is further off, so a bar sitting full
+ * while nothing happens can't happen. */
+function syncProgress(): void {
+  state.progress = Math.min(1, kills / KILLS_TO_BOSS, roundMs / ROUND_MIN_MS);
+}
+
+function maybeStartBoss(): void {
+  if (kills >= KILLS_TO_BOSS && roundMs >= ROUND_MIN_MS) startBossPhase();
 }
 
 /** The backdrop keeps moving in every phase, including select: a still
@@ -139,9 +165,9 @@ export function hitPlayer(): void {
 export function registerKill(): void {
   if (state.phase !== "playing") return;
   kills += 1;
-  state.progress = Math.min(1, kills / KILLS_TO_BOSS);
   if (state.player) addKillEnergy(state.player);
-  if (kills >= KILLS_TO_BOSS) startBossPhase();
+  syncProgress();
+  maybeStartBoss();
 }
 
 function startBossPhase(): void {
@@ -162,6 +188,7 @@ export function defeatBoss(): void {
   state.enemies = [];
   state.bossesDowned += 1;
   kills = 0;
+  roundMs = 0;
   state.progress = 0;
 
   if (state.bossesDowned >= ROUNDS_TO_WIN) {

@@ -72,6 +72,9 @@ export const ENEMY_SPRITES = {
   // fourteenth 1.4MB PNG for a ship that is on screen for two seconds at a
   // time. render.ts gives them a dive streak, which is what tells them apart.
   charger: sprite(files.enemyEvent, 67, 5, 1120, 1241),
+  // Elites likewise: they are told apart by flying in formation, which is a
+  // stronger signal than a different silhouette would be.
+  elite: sprite(files.enemyEvent, 67, 5, 1120, 1241),
 };
 
 export const BOSS_SPRITE = sprite(files.boss, 41, 0, 1175, 1249);

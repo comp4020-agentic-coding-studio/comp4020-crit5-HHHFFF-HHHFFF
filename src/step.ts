@@ -12,11 +12,11 @@
 // harness.ts, and therefore the spec tests) stays DOM-free.
 
 import {
-  ARENA_WIDTH,
   createEdgePowerUp,
-  createEventSquadMember,
+  createEliteWing,
   createNormalEnemy,
   type InputState,
+  randomFormation,
   randomPowerUpKind,
   updateBoss,
   updatePlayerEnergy,
@@ -49,12 +49,16 @@ function maybeSpawnEnemies(dtMs: number): void {
     state.enemies.push(createNormalEnemy(difficulty));
   }
 
+  // Elite wings. These used to be a squad arcing up from the bottom edge and
+  // nothing else, which made every wave the same event; they now arrive from
+  // any edge in one of four shapes, hold that shape while they fire, and
+  // leave. With the boss gated on ROUND_MIN_MS as well as the meter, the
+  // approach to a boss is long enough for two or three of them.
   eventSpawnMs -= dtMs;
   if (eventSpawnMs <= 0) {
-    eventSpawnMs = (9000 + Math.random() * 6000) / Math.min(2.5, difficulty);
-    const startX = Math.random() < 0.5 ? ARENA_WIDTH * 0.3 : ARENA_WIDTH * 0.7;
-    const squad = Math.min(7, 4 + Math.floor(difficulty - 1));
-    for (let i = 0; i < squad; i++) state.enemies.push(createEventSquadMember(i, startX, difficulty));
+    eventSpawnMs = (7000 + Math.random() * 4000) / Math.min(2.5, difficulty);
+    const { shape, entry } = randomFormation();
+    for (const elite of createEliteWing(shape, entry, difficulty)) state.enemies.push(elite);
   }
 }
 

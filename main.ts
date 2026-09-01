@@ -230,7 +230,10 @@ function frame(now: number): void {
     if (event.type === "shoot") audio.playShoot();
     else if (event.type === "explosion") audio.playExplosion(event.kind);
     else if (event.type === "hit") audio.playHit();
-    else if (event.type === "boss") audio.setMusicMode("boss");
+    else if (event.type === "boss") {
+      audio.setMusicMode("boss");
+      audio.playBossHorn();
+    } else if (event.type === "pickup") audio.playPickup(event.kind === "repair");
     else if (event.type === "enrage") audio.setMusicMode("enrage");
     else if (event.type === "victory") {
       audio.setMusicMode("normal");

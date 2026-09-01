@@ -119,8 +119,18 @@ export interface Player {
 
 // "charger" is the summoner's: it ignores the patrol band entirely and dives
 // the full height of the arena down one lane, after that lane has been
-// telegraphed.
-export type EnemyKind = "normal" | "event" | "charger";
+// telegraphed. "elite" flies in formation — see FORMATIONS below.
+export type EnemyKind = "normal" | "event" | "charger" | "elite";
+
+/** The shapes an elite wing flies in. Each one is only a set of offsets from a
+ * moving anchor, so a wing holds its shape wherever the anchor goes and the
+ * difference between them is four lines of trigonometry, not four movement
+ * systems. */
+export type FormationShape = "ring" | "line" | "wedge" | "column";
+
+/** Which edge a wing enters from. Squads used to arrive from the bottom and
+ * only from the bottom, which made every wave the same event twice. */
+export type FormationEntry = "top" | "left" | "right" | "bottom";
 
 export interface Enemy {
   kind: EnemyKind;
@@ -138,6 +148,15 @@ export interface Enemy {
   arcDuration?: number;
   arcStartX?: number;
   arcAmplitude?: number;
+  // elite-only formation flight
+  formShape?: FormationShape;
+  formIndex?: number;
+  formSize?: number;
+  formT?: number; // 0..1 along the anchor's in-hold-out path
+  formDuration?: number;
+  formEntry?: FormationEntry;
+  formHoldX?: number;
+  formHoldY?: number;
 }
 
 // Three rounds, three different fights. The archetype is what makes a round
@@ -191,7 +210,7 @@ export interface Bullet {
   damage: number;
 }
 
-export type PowerUpKind = "laser" | "diagonal" | "multiply";
+export type PowerUpKind = "laser" | "diagonal" | "multiply" | "repair";
 
 export interface PowerUp {
   kind: PowerUpKind;
@@ -334,6 +353,119 @@ export function createNormalEnemy(difficulty: number): Enemy {
   return enemy;
 }
 
+// ---------- elite wings ----------
+
+const FORMATION_SHAPES: FormationShape[] = ["ring", "line", "wedge", "column"];
+const FORMATION_ENTRIES: FormationEntry[] = ["top", "left", "right", "bottom"];
+const RING_RADIUS = 62;
+const RING_SPIN = 0.55; // radians/sec
+/** Fractions of the flight spent arriving and leaving; the middle is the hold,
+ * which is the part that reads as a formation rather than a fly-past. */
+const FORM_IN = 0.3;
+const FORM_OUT = 0.72;
+
+export function formationSize(shape: FormationShape): number {
+  if (shape === "ring") return 7;
+  if (shape === "line") return 6;
+  if (shape === "wedge") return 5;
+  return 4;
+}
+
+export function randomFormation(): { shape: FormationShape; entry: FormationEntry } {
+  return {
+    shape: FORMATION_SHAPES[Math.floor(Math.random() * FORMATION_SHAPES.length)],
+    entry: FORMATION_ENTRIES[Math.floor(Math.random() * FORMATION_ENTRIES.length)],
+  };
+}
+
+/** Where a wing's anchor starts, holds and finishes, in arena coordinates. The
+ * hold is always inside the player's half-free zone up top; a wing that parked
+ * on the player would be a collision, not a formation. */
+function anchorPath(entry: FormationEntry, holdX: number, holdY: number): {
+  from: [number, number];
+  hold: [number, number];
+  to: [number, number];
+} {
+  const off = 140;
+  if (entry === "top") return { from: [holdX, -off], hold: [holdX, holdY], to: [holdX, -off] };
+  if (entry === "bottom") {
+    return { from: [holdX, ARENA_HEIGHT + off], hold: [holdX, holdY], to: [holdX, -off] };
+  }
+  const fromLeft = entry === "left";
+  return {
+    from: [fromLeft ? -off : ARENA_WIDTH + off, holdY],
+    hold: [holdX, holdY],
+    to: [fromLeft ? ARENA_WIDTH + off : -off, holdY],
+  };
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+/** The anchor's position at `t`, easing in, holding, then easing out. */
+function anchorAt(enemy: Enemy, t: number): [number, number] {
+  const path = anchorPath(enemy.formEntry ?? "top", enemy.formHoldX ?? ARENA_WIDTH / 2, enemy.formHoldY ?? 200);
+  if (t <= FORM_IN) {
+    const k = t / FORM_IN;
+    const eased = 1 - (1 - k) * (1 - k); // ease-out, so it settles rather than slams
+    return [lerp(path.from[0], path.hold[0], eased), lerp(path.from[1], path.hold[1], eased)];
+  }
+  if (t < FORM_OUT) return [path.hold[0], path.hold[1]];
+  const k = (t - FORM_OUT) / (1 - FORM_OUT);
+  return [lerp(path.hold[0], path.to[0], k * k), lerp(path.hold[1], path.to[1], k * k)];
+}
+
+/** One member's offset from the anchor. This is the whole difference between
+ * the shapes. */
+function formationOffset(enemy: Enemy, elapsedSeconds: number): [number, number] {
+  const index = enemy.formIndex ?? 0;
+  const size = enemy.formSize ?? 1;
+  const middle = (size - 1) / 2;
+
+  if (enemy.formShape === "ring") {
+    const angle = (index / size) * Math.PI * 2 + elapsedSeconds * RING_SPIN;
+    return [Math.cos(angle) * RING_RADIUS, Math.sin(angle) * RING_RADIUS];
+  }
+  if (enemy.formShape === "line") return [(index - middle) * 52, 0];
+  if (enemy.formShape === "wedge") return [(index - middle) * 44, Math.abs(index - middle) * 30];
+  return [0, (index - middle) * 48]; // column
+}
+
+export function createEliteWing(shape: FormationShape, entry: FormationEntry, difficulty: number): Enemy[] {
+  const size = formationSize(shape);
+  const margin = 110;
+  const holdX = margin + Math.random() * (ARENA_WIDTH - margin * 2);
+  const holdY = 150 + Math.random() * 130;
+  const duration = 9 / Math.min(1.8, difficulty);
+
+  const wing: Enemy[] = [];
+  for (let index = 0; index < size; index++) {
+    wing.push({
+      kind: "elite",
+      x: holdX,
+      y: -200,
+      vx: 0,
+      vy: 0,
+      speed: 0,
+      hp: 3,
+      // Staggered so a wing doesn't fire as one shotgun blast.
+      fireCooldownMs: 900 + index * 260 + Math.random() * 500,
+      fireIntervalMs: (2200 + Math.random() * 900) / Math.min(2.4, difficulty),
+      dirChangeMs: Number.POSITIVE_INFINITY,
+      formShape: shape,
+      formIndex: index,
+      formSize: size,
+      formT: 0,
+      formDuration: duration,
+      formEntry: entry,
+      formHoldX: holdX,
+      formHoldY: holdY,
+    });
+  }
+  return wing;
+}
+
 export function createEventSquadMember(index: number, startX: number, difficulty: number): Enemy {
   return {
     kind: "event",
@@ -424,6 +556,27 @@ export function updateEnemy(
     return;
   }
 
+  if (enemy.kind === "elite") {
+    const duration = enemy.formDuration ?? 9;
+    enemy.formT = (enemy.formT ?? 0) + dtSeconds / duration;
+    const t = Math.max(0, Math.min(1, enemy.formT));
+    const [ax, ay] = anchorAt(enemy, t);
+    const [ox, oy] = formationOffset(enemy, t * duration);
+    enemy.x = ax + ox;
+    enemy.y = ay + oy;
+
+    // Only fires once it has arrived: a wing shooting from off-screen is an
+    // ambush, and the shape is supposed to be the warning.
+    if (t < FORM_IN) return;
+    enemy.fireCooldownMs -= dtMs;
+    if (enemy.fireCooldownMs > 0) return;
+    enemy.fireCooldownMs = enemy.fireIntervalMs;
+    const vy = 200 * Math.min(2, difficulty);
+    const vx = ((playerX - enemy.x) / ARENA_HEIGHT) * vy;
+    bullets.push({ owner: "enemy", x: enemy.x, y: enemy.y + 14, vx, vy, width: 6, height: 12, damage: 1 });
+    return;
+  }
+
   // event squad member: arc in from the bottom edge, out the top
   enemy.arcT = (enemy.arcT ?? 0) + dtSeconds / (enemy.arcDuration ?? 4.5);
   const t = Math.min(1, Math.max(0, enemy.arcT));
@@ -433,6 +586,7 @@ export function updateEnemy(
 
 export function isEnemyOffscreen(enemy: Enemy): boolean {
   if (enemy.kind === "charger") return enemy.y > ARENA_HEIGHT + 40;
+  if (enemy.kind === "elite") return (enemy.formT ?? 0) > 1;
   return enemy.kind === "event" && (enemy.arcT ?? 0) > 1;
 }
 
@@ -495,17 +649,21 @@ export function advanceBossPhase(boss: Boss): BossTransition | null {
   boss.barIndex = index;
   boss.flashMs = BAR_BREAK_MS;
 
-  if (index === 1 && boss.archetype === "berserker" && !boss.enraged) {
+  // Each round keeps everything the last one had, so the triggers are stated
+  // as thresholds rather than as archetypes. Round 2 (two bars) enrages on its
+  // last bar, which is also its half; round 3 (three bars) enrages one bar
+  // earlier and then splits on its last, so its final bar is an enraged twin.
+  if (index === 1 && boss.round >= 3 && !boss.clone) {
+    boss.clone = { x: ARENA_WIDTH - boss.x, y: boss.y };
+    return "clone";
+  }
+  if (index <= boss.bars - 1 && boss.round >= 2 && !boss.enraged) {
     boss.enraged = true;
     boss.enrageMs = ENRAGE_FLARE_MS;
     // Cut whatever it was waiting on, so the flare is followed by fire rather
     // than by a suspiciously calm second.
     boss.patternCooldownMs = Math.min(boss.patternCooldownMs, 420);
     return "enrage";
-  }
-  if (index === 1 && boss.archetype === "twin" && !boss.clone) {
-    boss.clone = { x: ARENA_WIDTH - boss.x, y: boss.y };
-    return "clone";
   }
   return "bar-break";
 }
@@ -544,43 +702,66 @@ function pushOrb(bullets: Bullet[], x: number, y: number, angle: number, speed: 
   });
 }
 
-function volleyIntervalMs(boss: Boss): number {
-  if (boss.archetype === "summoner") return 1400;
-  if (boss.archetype === "berserker") return boss.enraged ? 380 : 900;
-  return 1100;
+export type BossPattern = "aimed" | "spiral" | "pulse";
+
+/** Every pattern a boss of this round knows. A round inherits the previous
+ * rounds' whole repertoire and adds one, so round 3 fights with all three and
+ * cycles between them --- which is also why the volley interval is a property
+ * of the pattern rather than of the boss. */
+export function bossPatterns(round: number): BossPattern[] {
+  const patterns: BossPattern[] = ["aimed"];
+  if (round >= 2) patterns.push("spiral");
+  if (round >= 3) patterns.push("pulse");
+  return patterns;
 }
 
-/** Each archetype's volley. Deliberately different shapes, not the same shape
- * with a different count: an aimed fan you sidestep, a spiral you read the
- * rotation of, and a pulse you find the gap in. */
+function currentPattern(boss: Boss): BossPattern {
+  const patterns = bossPatterns(boss.round);
+  return patterns[boss.volley % patterns.length];
+}
+
+function volleyIntervalMs(boss: Boss): number {
+  const base = currentPattern(boss) === "aimed" ? 1200 : 950;
+  return boss.enraged ? base * 0.45 : base;
+}
+
+/** Deliberately different shapes, not the same shape with a different count:
+ * an aimed fan you sidestep, a spiral you read the rotation of, and a pulse
+ * you find the gap in. Both twin bodies fire every pattern, in lockstep. */
 function fireVolley(boss: Boss, bullets: Bullet[], playerX: number, playerY: number): void {
-  if (boss.archetype === "summoner") {
-    // Sparse and aimed. The lane charges are this fight's pressure; a wall of
-    // bullets on top of them would leave nowhere to stand.
-    const base = Math.atan2(playerY - boss.y, playerX - boss.x);
-    for (let i = -1; i <= 1; i++) pushOrb(bullets, boss.x, boss.y, base + i * 0.18, 210, 8);
+  const pattern = currentPattern(boss);
+  const bodies = bossBodies(boss);
+
+  if (pattern === "aimed") {
+    const arm = boss.enraged ? 2 : 1;
+    for (const body of bodies) {
+      const base = Math.atan2(playerY - body.y, playerX - body.x);
+      for (let i = -arm; i <= arm; i++) pushOrb(bullets, body.x, body.y, base + i * 0.18, 210, 8);
+    }
     return;
   }
 
-  if (boss.archetype === "berserker") {
+  if (pattern === "spiral") {
     const count = boss.enraged ? 14 : 11;
     const spin = boss.volley * (boss.enraged ? 0.55 : 0.32);
     // Enraged it throws a second arm winding the other way, so the readable
     // one-way spiral becomes a lattice.
     const arms = boss.enraged ? [1, -1] : [1];
-    for (const dir of arms) {
-      for (let i = 0; i < count; i++) {
-        const angle = dir * spin + (i / count) * Math.PI * 2;
-        pushOrb(bullets, boss.x, boss.y, angle, boss.enraged ? 250 : 205, boss.enraged ? 10 : 8);
+    for (const body of bodies) {
+      for (const dir of arms) {
+        for (let i = 0; i < count; i++) {
+          const angle = dir * spin + (i / count) * Math.PI * 2;
+          pushOrb(bullets, body.x, body.y, angle, boss.enraged ? 250 : 205, boss.enraged ? 10 : 8);
+        }
       }
     }
     return;
   }
 
-  // twin: ring pulses, half-step rotated every other volley so the gaps move.
+  // pulse: a ring, half-step rotated every other volley so the gaps move.
   const count = 12;
   const offset = (boss.volley % 2) * (Math.PI / count);
-  for (const body of bossBodies(boss)) {
+  for (const body of bodies) {
     for (let i = 0; i < count; i++) {
       pushOrb(bullets, body.x, body.y, offset + (i / count) * Math.PI * 2, 200, 9);
     }
@@ -632,7 +813,9 @@ export function updateBoss(
     boss.clone.y = boss.y;
   }
 
-  if (boss.archetype === "summoner") updateSummons(boss, dtMs, enemies);
+  // Every round summons, not just round 1: the lane charges are round 1's
+  // contribution to a repertoire each later boss inherits whole.
+  updateSummons(boss, dtMs, enemies);
 
   boss.patternCooldownMs -= dtMs;
   if (boss.patternCooldownMs > 0) return;
@@ -675,16 +858,42 @@ export function isPowerUpOffscreen(powerUp: PowerUp): boolean {
   return powerUp.y > ARENA_HEIGHT + 20 || powerUp.x < -40 || powerUp.x > ARENA_WIDTH + 40;
 }
 
-export function applyPowerUp(weapon: WeaponState, kind: PowerUpKind): void {
-  if (kind === "laser") weapon.laser = true;
-  else if (kind === "diagonal") weapon.diagonals = true;
-  else weapon.multiplier *= 2;
+/** The gun widens one lane at a time, and stops.
+ *
+ * It used to double — and doubling is a trap that only shows up once a run is
+ * long enough to collect from. With the round clock holding each round to
+ * ROUND_MIN_MS and drops front-loaded, a measured run finished on multiplier
+ * 64: 64 bullets per lane per shot, three inherited boss patterns invisible
+ * because all three bosses died in nine seconds between them, and a screen so
+ * full of the player's own fire that nothing else could be read through it.
+ * Additive with a ceiling keeps the pickup worth taking without turning the
+ * last two thirds of the run into a formality. */
+const MULTIPLIER_CAP = 6;
+
+/** Takes the whole player, not just the weapon: repair is the first pickup
+ * that isn't a gun upgrade. Returns whether it actually did anything, so the
+ * caller can tell a real pickup from a wasted one. */
+export function applyPowerUp(player: Player, kind: PowerUpKind): boolean {
+  if (kind === "laser") player.weapon.laser = true;
+  else if (kind === "diagonal") player.weapon.diagonals = true;
+  else if (kind === "multiply") {
+    if (player.weapon.multiplier >= MULTIPLIER_CAP) return false;
+    player.weapon.multiplier += 1;
+  } else if (kind === "repair") {
+    if (player.lives >= player.maxLives) return false;
+    player.lives += 1;
+  }
+  return true;
 }
 
-const POWERUP_KINDS: PowerUpKind[] = ["laser", "diagonal", "multiply"];
+const WEAPON_POWERUP_KINDS: PowerUpKind[] = ["laser", "diagonal", "multiply"];
 
-export function randomPowerUpKind(): PowerUpKind {
-  return POWERUP_KINDS[Math.floor(Math.random() * POWERUP_KINDS.length)];
+/** Repair only exists when it would do something. Offering a life back to a
+ * player on full lives is a pickup that teaches you pickups can be worthless,
+ * and the three-round run is short enough that a wasted drop is expensive. */
+export function randomPowerUpKind(livesMissing = 0): PowerUpKind {
+  if (livesMissing > 0 && Math.random() < 0.3) return "repair";
+  return WEAPON_POWERUP_KINDS[Math.floor(Math.random() * WEAPON_POWERUP_KINDS.length)];
 }
 
 export type ExplosionKind = "enemy" | "boss";

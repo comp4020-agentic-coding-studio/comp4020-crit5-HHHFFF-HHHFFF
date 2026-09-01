@@ -124,10 +124,16 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
     if (enemy.hp <= 0) {
       state.explosions.push(createExplosion("enemy", enemy.x, enemy.y));
       pushEvent({ type: "explosion", kind: "enemy" });
-      if (enemy.kind === "normal") {
+      // Elites count towards the boss meter and drop like anything else --- a
+      // wing you fought through shouldn't be worth less than a patroller.
+      // Chargers don't: registerKill no-ops during a boss phase anyway, and
+      // paying out drops for the boss's own adds would fund the fight you are
+      // in the middle of.
+      if (enemy.kind === "normal" || enemy.kind === "elite") {
         registerKill();
         if (Math.random() < powerUpDropChance()) {
-          state.powerUps.push(createPowerUp(randomPowerUpKind(), enemy.x, enemy.y));
+          const missing = player.maxLives - player.lives;
+          state.powerUps.push(createPowerUp(randomPowerUpKind(missing), enemy.x, enemy.y));
         }
       }
       continue;
@@ -143,7 +149,7 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
   const remainingPowerUps = [];
   for (const powerUp of state.powerUps) {
     if (circleHit(powerUp.x, powerUp.y, 12, player.x, player.y, PLAYER_RADIUS)) {
-      applyPowerUp(player.weapon, powerUp.kind);
+      if (applyPowerUp(player, powerUp.kind)) pushEvent({ type: "pickup", kind: powerUp.kind });
       continue;
     }
     if (isPowerUpOffscreen(powerUp)) continue;
