@@ -16,11 +16,11 @@ import {
   createEdgePowerUp,
   createEliteWing,
   createNormalEnemy,
-  type FormationEntry,
-  type FormationShape,
+  type Enemy,
   type InputState,
   type Telegraph,
   randomFormation,
+  wingEntryColumns,
   randomPowerUpKind,
   updateBoss,
   updatePlayerEnergy,
@@ -43,11 +43,14 @@ export function resetSpawnTimers(): void {
   pendingWings = [];
 }
 
-/** A wing that has been announced but hasn't arrived yet. */
+/** A wing that has been announced but hasn't arrived yet.
+ *
+ * It holds the built ships, not the recipe for them. The first version stored
+ * the recipe and called createEliteWing again on arrival — which re-rolls the
+ * hold position, so the beams marked one column and the wing rose through
+ * another. The warning has to be the same wing, not another one like it. */
 interface PendingWing {
-  shape: FormationShape;
-  entry: FormationEntry;
-  difficulty: number;
+  wing: Enemy[];
   msLeft: number;
 }
 
@@ -65,16 +68,17 @@ export const WING_WARNING_MS = 1200;
  */
 function queueEliteWing(difficulty: number): void {
   const { shape, entry } = randomFormation();
+  const wing = createEliteWing(shape, entry, difficulty);
   if (entry !== "bottom") {
-    for (const elite of createEliteWing(shape, entry, difficulty)) state.enemies.push(elite);
+    for (const elite of wing) state.enemies.push(elite);
     return;
   }
-  const wing = createEliteWing(shape, entry, difficulty);
-  // The wing is built now so the warning can be drawn at the exact column it
-  // will use, then thrown away and rebuilt on arrival with the same hold.
-  const holdX = wing[0]?.formHoldX ?? ARENA_WIDTH / 2;
-  state.telegraphs.push({ x: holdX, msLeft: WING_WARNING_MS, totalMs: WING_WARNING_MS, rising: true });
-  pendingWings.push({ shape, entry, difficulty, msLeft: WING_WARNING_MS });
+  // One beam per ship, at the column that ship will actually rise through, and
+  // then *this* wing is what arrives.
+  for (const x of wingEntryColumns(wing)) {
+    state.telegraphs.push({ x, msLeft: WING_WARNING_MS, totalMs: WING_WARNING_MS, rising: true });
+  }
+  pendingWings.push({ wing, msLeft: WING_WARNING_MS });
 }
 
 function updatePendingWings(dtMs: number): void {
@@ -86,9 +90,7 @@ function updatePendingWings(dtMs: number): void {
       stillWaiting.push(pending);
       continue;
     }
-    for (const elite of createEliteWing(pending.shape, pending.entry, pending.difficulty)) {
-      state.enemies.push(elite);
-    }
+    for (const elite of pending.wing) state.enemies.push(elite);
   }
   pendingWings = stillWaiting;
 }
@@ -140,7 +142,12 @@ function maybeDriftPowerUp(dtMs: number): void {
     const eased = Math.max(0, 1 - state.elapsedMs / 60000);
     const spacing = 22000 + Math.random() * 14000;
     edgePowerUpMs = spacing * (1 - 0.6 * eased);
-    state.powerUps.push(createEdgePowerUp(randomPowerUpKind()));
+    // Called with the damage the player is carrying, like kill drops are. It
+    // was called bare, which meant a drift-in could never be a repair — half
+    // the pickups in the game were silently excluded from the one kind a
+    // struggling player needs.
+    const missing = state.player ? Math.max(0, state.player.maxLives - state.player.lives) : 0;
+    state.powerUps.push(createEdgePowerUp(randomPowerUpKind(missing)));
   }
 }
 

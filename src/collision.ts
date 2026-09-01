@@ -33,10 +33,15 @@ const PLAYER_INVULNERABLE_MS = 500;
 const POWERUP_DROP_CHANCE = 0.12;
 const POWERUP_EARLY_BONUS = 0.12;
 const POWERUP_EASE_MS = 90000;
+/** Extra drop chance per life already lost. The early bonus has fully decayed
+ * by 90s, which is exactly where rounds 2 and 3 live, so a player who arrives
+ * at the berserker already hurt was getting the thinnest drops in the run at
+ * the point they needed them most. This leans the other way. */
+const POWERUP_COMEBACK_PER_LIFE = 0.035;
 
-function powerUpDropChance(): number {
+function powerUpDropChance(livesMissing: number): number {
   const eased = Math.max(0, 1 - state.elapsedMs / POWERUP_EASE_MS);
-  return POWERUP_DROP_CHANCE + POWERUP_EARLY_BONUS * eased;
+  return POWERUP_DROP_CHANCE + POWERUP_EARLY_BONUS * eased + POWERUP_COMEBACK_PER_LIFE * livesMissing;
 }
 
 function circleHit(ax: number, ay: number, ar: number, bx: number, by: number, br: number): boolean {
@@ -133,8 +138,11 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
       // in the middle of.
       if (enemy.kind === "normal" || enemy.kind === "elite") {
         registerKill();
-        if (Math.random() < powerUpDropChance()) {
-          const missing = player.maxLives - player.lives;
+        // Clamped: lives can exceed maxLives (the harness tops them up), and an
+        // unclamped negative here made the comeback term subtract, which turned
+        // drops off completely rather than boosting them.
+        const missing = Math.max(0, player.maxLives - player.lives);
+        if (Math.random() < powerUpDropChance(missing)) {
           state.powerUps.push(createPowerUp(randomPowerUpKind(missing), enemy.x, enemy.y));
         }
       }

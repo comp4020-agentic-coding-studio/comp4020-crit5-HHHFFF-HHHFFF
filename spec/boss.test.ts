@@ -15,12 +15,14 @@ import {
   createEliteWing,
   createPlayer,
   type Enemy,
+  FORMATION_ARRIVAL_T,
   formationSize,
   isEnemyOffscreen,
   randomPowerUpKind,
   ROUNDS_TO_WIN,
   updateBoss,
   updateEnemy,
+  wingEntryColumns,
 } from "../src/entities";
 
 // Three rounds, three fights. What is worth pinning here is not that a boss
@@ -352,6 +354,33 @@ describe("the approach to a boss", () => {
     for (const elite of wing) expect(elite.y).toBeGreaterThan(0);
   });
 
+  // A wing is several ships abreast, so one beam down the middle of the
+  // formation announces a column most of them never use. Every shape gets
+  // checked because they spread differently: a column is one lane, a line is
+  // six, and a ring's members are still moving when they arrive.
+  it("marks one column per ship, where that ship actually comes up", () => {
+    for (const shape of ["ring", "line", "wedge", "column"] as const) {
+      const wing = createEliteWing(shape, "bottom", 1);
+      const lanes = wingEntryColumns(wing);
+      expect(lanes.length).toBeGreaterThan(0);
+
+      // Fly it to the moment it finishes arriving --- the instant the beams
+      // are promising something about.
+      while ((wing[0].formT ?? 0) < FORMATION_ARRIVAL_T) {
+        for (const elite of wing) updateEnemy(elite, 0.016, 16, [], PLAYER_X, 1);
+      }
+
+      for (const elite of wing) {
+        const nearest = Math.min(...lanes.map((lane) => Math.abs(lane - elite.x)));
+        expect(nearest).toBeLessThan(20);
+      }
+      // A column formation stacks vertically, so it must not be announced with
+      // one beam per ship.
+      if (shape === "column") expect(lanes.length).toBe(1);
+      if (shape === "line") expect(lanes.length).toBe(formationSize("line"));
+    }
+  });
+
   it("retires a wing once it has flown through", () => {
     const wing = createEliteWing("line", "left", 1);
     expect(wing.every((elite) => !isEnemyOffscreen(elite))).toBe(true);
@@ -439,6 +468,7 @@ describe("wings that come up from behind", () => {
         // Everything already on screen when the beam lights. Anything that
         // rises from the bottom *after* this point, before the beam clears,
         // is an arrival that outran its own warning.
+        const lanes = state.telegraphs.filter((lane) => lane.rising).map((lane) => lane.x);
         const before = new Set(state.enemies);
         let framesWarned = 0;
         while (state.telegraphs.some((lane) => lane.rising) && state.phase === "playing") {
@@ -455,6 +485,16 @@ describe("wings that come up from behind", () => {
           (enemy) => enemy.kind === "elite" && enemy.formEntry === "bottom" && !before.has(enemy),
         );
         expect(arrived.length).toBeGreaterThan(0);
+
+        // The warning has to be about *this* wing. The first version built a
+        // wing to read its column, threw it away, and called createEliteWing
+        // again on arrival — which re-rolls the hold, so the beams marked one
+        // column and the ships came up somewhere else entirely.
+        const arrivedColumns = wingEntryColumns(arrived);
+        expect(arrivedColumns.length).toBe(lanes.length);
+        for (const column of arrivedColumns) {
+          expect(lanes.some((lane) => Math.abs(lane - column) < 1)).toBe(true);
+        }
         sawWarningFirst = true;
       }
     }

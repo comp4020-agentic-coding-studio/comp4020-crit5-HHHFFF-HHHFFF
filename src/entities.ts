@@ -450,6 +450,28 @@ function formationOffset(enemy: Enemy, elapsedSeconds: number): [number, number]
   return [0, (index - middle) * 48]; // column
 }
 
+/** How far through a wing's flight it has finished arriving. */
+export const FORMATION_ARRIVAL_T = FORM_IN;
+
+/** The columns a wing will actually rise through, one per ship.
+ *
+ * A wing is several ships abreast, so a single beam down the formation's
+ * centre says almost nothing about where any individual ship comes up --- a
+ * six-wide line would be announced by one lane and arrive across six. This
+ * returns each member's column at the moment it finishes arriving, near-
+ * duplicates merged, so a column formation still gets one beam and a line gets
+ * six. */
+export function wingEntryColumns(wing: Enemy[]): number[] {
+  const columns: number[] = [];
+  for (const enemy of wing) {
+    const duration = enemy.formDuration ?? 9;
+    const [offsetX] = formationOffset(enemy, FORM_IN * duration);
+    const x = (enemy.formHoldX ?? ARENA_WIDTH / 2) + offsetX;
+    if (!columns.some((existing) => Math.abs(existing - x) < 14)) columns.push(x);
+  }
+  return columns;
+}
+
 export function createEliteWing(shape: FormationShape, entry: FormationEntry, difficulty: number): Enemy[] {
   const size = formationSize(shape);
   const margin = 110;
@@ -911,9 +933,15 @@ const WEAPON_POWERUP_KINDS: PowerUpKind[] = ["laser", "diagonal", "multiply"];
 
 /** Repair only exists when it would do something. Offering a life back to a
  * player on full lives is a pickup that teaches you pickups can be worthless,
- * and the three-round run is short enough that a wasted drop is expensive. */
+ * and the three-round run is short enough that a wasted drop is expensive.
+ *
+ * Its share of drops climbs with how much damage the player is actually
+ * carrying: a flat 30% was too thin from round 2 on, where the fights are
+ * longer and a player arrives already down. By three lives lost, over half of
+ * what drops is a repair. */
 export function randomPowerUpKind(livesMissing = 0): PowerUpKind {
-  if (livesMissing > 0 && Math.random() < 0.3) return "repair";
+  const repairShare = Math.min(0.55, 0.22 + 0.13 * livesMissing);
+  if (livesMissing > 0 && Math.random() < repairShare) return "repair";
   return WEAPON_POWERUP_KINDS[Math.floor(Math.random() * WEAPON_POWERUP_KINDS.length)];
 }
 
