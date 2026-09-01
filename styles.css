@@ -31,6 +31,45 @@ a {
   border-radius: 8px;
 }
 
+/* ---------- mute toggle ---------- */
+
+#mute {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom-width: 3px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f6ff;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    transform 90ms ease,
+    background-color 90ms ease,
+    border-color 90ms ease,
+    box-shadow 90ms ease;
+}
+
+#mute:hover,
+#mute:focus-visible {
+  border-color: #8fe3ff;
+  box-shadow: 0 0 16px -4px #8fe3ff;
+}
+
+#mute[aria-pressed="true"] {
+  transform: translateY(2px);
+  border-bottom-width: 1px;
+  background: rgba(255, 95, 126, 0.18);
+  border-color: #ff5f7e;
+}
+
 /* ---------- ship select ---------- */
 
 #select {

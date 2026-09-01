@@ -24,7 +24,7 @@ import {
   updatePlayerMovement,
 } from "./entities";
 import { stepBulletsAndCollisions, stepEnemyMovement, stepExplosions } from "./collision";
-import { advanceScroll, currentDifficulty, state, tickClock } from "./state";
+import { advanceScroll, currentDifficulty, pushEvent, state, tickClock } from "./state";
 
 const IDLE_INPUT: InputState = { left: false, right: false, up: false, down: false };
 
@@ -83,7 +83,9 @@ export function stepWorld(dtMs: number, input: InputState = IDLE_INPUT): void {
     if (player) {
       updatePlayerMovement(player, input, dtSeconds);
       updatePlayerEnergy(player, dtMs);
+      const bulletsBefore = state.bullets.length;
       updatePlayerFiring(player, dtMs, state.bullets);
+      if (state.bullets.length > bulletsBefore) pushEvent({ type: "shoot" });
     }
 
     maybeSpawnEnemies(dtMs);

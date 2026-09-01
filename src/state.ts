@@ -19,11 +19,19 @@ import {
   difficultyAt,
   type Enemy,
   type Explosion,
+  type ExplosionKind,
   type Player,
   type PowerUp,
 } from "./entities";
 
 export type GamePhase = "select" | "playing" | "boss" | "lost";
+
+// Fire-and-forget notifications for the presentation layer (main.ts) to turn
+// into sound, the same way it turns `state` into pixels via render.ts — kept
+// as plain data so state.ts/collision.ts/step.ts never import audio.ts and
+// stay DOM/Web-Audio-free for spec/*.test.ts (see CLAUDE.md: JSDOM has no
+// AudioContext at all).
+export type GameEvent = { type: "hit" } | { type: "shoot" } | { type: "explosion"; kind: ExplosionKind };
 
 export interface GameState {
   phase: GamePhase;
@@ -37,6 +45,7 @@ export interface GameState {
   elapsedMs: number;
   bossesDowned: number;
   scrollY: number;
+  events: GameEvent[];
 }
 
 const KILLS_TO_BOSS = 10;
@@ -54,7 +63,13 @@ function createInitialState(): GameState {
     elapsedMs: 0,
     bossesDowned: 0,
     scrollY: 0,
+    events: [],
   };
+}
+
+/** Queues a fire-and-forget notification for main.ts to drain each frame. */
+export function pushEvent(event: GameEvent): void {
+  state.events.push(event);
 }
 
 // Kills counted separately from `progress` (a 0..1 display value derived
@@ -105,6 +120,7 @@ export function advanceScroll(dtMs: number): void {
 export function hitPlayer(): void {
   if (!state.player || state.phase === "lost") return;
   state.player.lives -= 1;
+  pushEvent({ type: "hit" });
   if (state.player.lives <= 0) {
     state.phase = "lost";
   }

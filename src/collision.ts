@@ -18,7 +18,7 @@ import {
   updateExplosion,
   updatePowerUp,
 } from "./entities";
-import { currentDifficulty, defeatBoss, hitPlayer, registerKill, state } from "./state";
+import { currentDifficulty, defeatBoss, hitPlayer, pushEvent, registerKill, state } from "./state";
 
 const PLAYER_RADIUS = 16;
 const ENEMY_RADIUS = 14;
@@ -89,6 +89,7 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
       const { x, y } = state.boss;
       defeatBoss();
       state.explosions.push(createExplosion("boss", x, y));
+      pushEvent({ type: "explosion", kind: "boss" });
     }
   }
 
@@ -97,6 +98,7 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
   for (const enemy of state.enemies) {
     if (enemy.hp <= 0) {
       state.explosions.push(createExplosion("enemy", enemy.x, enemy.y));
+      pushEvent({ type: "explosion", kind: "enemy" });
       if (enemy.kind === "normal") {
         registerKill();
         if (Math.random() < POWERUP_DROP_CHANCE) {

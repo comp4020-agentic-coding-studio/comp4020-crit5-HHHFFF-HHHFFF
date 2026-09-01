@@ -2,6 +2,7 @@ import { ARENA_HEIGHT, ARENA_WIDTH, type ShipDef, SHIPS, shipStats } from "./src
 import { SHIP_IMAGES } from "./src/assets";
 import { installHarness } from "./src/harness";
 import * as render from "./src/render";
+import * as audio from "./src/audio";
 import { createInput } from "./src/input";
 import { resetGame, selectShip, state } from "./src/state";
 import { resetSpawnTimers, stepWorld } from "./src/step";
@@ -20,6 +21,7 @@ const panelName = requireElement<HTMLParagraphElement>("#panel-name");
 const panelBlurb = requireElement<HTMLParagraphElement>("#panel-blurb");
 const panelStats = requireElement<HTMLDivElement>("#panel-stats");
 const keys = requireElement<HTMLDivElement>("#keys");
+const muteButton = requireElement<HTMLButtonElement>("#mute");
 
 canvas.width = ARENA_WIDTH;
 canvas.height = ARENA_HEIGHT;
@@ -85,9 +87,22 @@ function previewShip(index: number): void {
 }
 
 function startRun(index: number): void {
+  audio.initAudio();
   resetSpawnTimers();
   selectShip(index);
 }
+
+function syncMuteButton(): void {
+  const muted = audio.isMuted();
+  muteButton.setAttribute("aria-pressed", String(muted));
+  muteButton.textContent = muted ? "🔇" : "🔊";
+}
+
+muteButton.addEventListener("click", () => {
+  audio.toggleMute();
+  syncMuteButton();
+});
+syncMuteButton();
 
 for (const [index, ship] of SHIPS.entries()) {
   const button = document.createElement("button");
@@ -121,7 +136,14 @@ previewShip(0);
 
 // The key caps demo themselves in sequence until a real key goes down, then
 // hand over to live input for good.
-window.addEventListener("keydown", () => keys.classList.add("live"), { once: true });
+window.addEventListener(
+  "keydown",
+  () => {
+    keys.classList.add("live");
+    audio.initAudio();
+  },
+  { once: true },
+);
 
 const KEY_CAPS = [
   { node: requireElement<HTMLElement>('.key[data-dir="up"]'), dir: "up" },
@@ -158,6 +180,17 @@ function frame(now: number): void {
   if (state.phase === "select") syncKeyCaps();
 
   stepWorld(dtMs, input);
+
+  for (const event of state.events) {
+    if (event.type === "shoot") audio.playShoot();
+    else if (event.type === "explosion") audio.playExplosion(event.kind);
+    else if (event.type === "hit") audio.playHit();
+  }
+  state.events = [];
+
+  const thrusting =
+    (state.phase === "playing" || state.phase === "boss") && (input.left || input.right || input.up || input.down);
+  audio.setEngineIntensity(thrusting ? 1 : 0);
 
   render.clear(ctx, state.scrollY);
   for (const enemy of state.enemies) render.drawEnemy(ctx, enemy);
