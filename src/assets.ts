@@ -68,6 +68,10 @@ export const SHIP_SPRITES: Record<"interceptor" | "bulwark" | "striker", Sprite>
 export const ENEMY_SPRITES = {
   normal: sprite(files.enemyNormal, 254, 73, 746, 987),
   event: sprite(files.enemyEvent, 67, 5, 1120, 1241),
+  // The summoner's chargers reuse the event ship's art rather than adding a
+  // fourteenth 1.4MB PNG for a ship that is on screen for two seconds at a
+  // time. render.ts gives them a dive streak, which is what tells them apart.
+  charger: sprite(files.enemyEvent, 67, 5, 1120, 1241),
 };
 
 export const BOSS_SPRITE = sprite(files.boss, 41, 0, 1175, 1249);

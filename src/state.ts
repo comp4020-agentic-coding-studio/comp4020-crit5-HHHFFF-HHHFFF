@@ -5,9 +5,10 @@
 // through the exact same functions instead of two implementations of "you
 // lost" or "the boss went down".
 //
-// Endless mode: there is no winning phase. The boss is a recurring wave, not
-// a finish line — downing it banks the round and drops straight back into
-// play with everything a notch harder. The run ends exactly one way.
+// A run is ROUNDS_TO_WIN boss rounds long and ends two ways: the third boss
+// goes down and you win, or you run out of lives. The brief's spec line is
+// "play ends somewhere — a win, a loss or a finish", and both terminal phases
+// are set here, in the same two functions the harness drives.
 
 import {
   addKillEnergy,
@@ -22,16 +23,23 @@ import {
   type ExplosionKind,
   type Player,
   type PowerUp,
+  ROUNDS_TO_WIN,
 } from "./entities";
 
-export type GamePhase = "select" | "playing" | "boss" | "lost";
+export type GamePhase = "select" | "playing" | "boss" | "lost" | "won";
 
 // Fire-and-forget notifications for the presentation layer (main.ts) to turn
 // into sound, the same way it turns `state` into pixels via render.ts — kept
 // as plain data so state.ts/collision.ts/step.ts never import audio.ts and
 // stay DOM/Web-Audio-free for spec/*.test.ts (see CLAUDE.md: JSDOM has no
 // AudioContext at all).
-export type GameEvent = { type: "hit" } | { type: "shoot" } | { type: "explosion"; kind: ExplosionKind };
+export type GameEvent =
+  | { type: "hit" }
+  | { type: "shoot" }
+  | { type: "explosion"; kind: ExplosionKind }
+  | { type: "boss" }
+  | { type: "enrage" }
+  | { type: "victory" };
 
 export interface GameState {
   phase: GamePhase;
@@ -118,7 +126,9 @@ export function advanceScroll(dtMs: number): void {
 
 /** The one way a bullet (or the test harness) takes a life. */
 export function hitPlayer(): void {
-  if (!state.player || state.phase === "lost") return;
+  // Terminal phases are terminal in both directions: a bullet still in the air
+  // when the last boss dies must not turn a win into a loss.
+  if (!state.player || state.phase === "lost" || state.phase === "won") return;
   state.player.lives -= 1;
   pushEvent({ type: "hit" });
   if (state.player.lives <= 0) {
@@ -139,17 +149,25 @@ function startBossPhase(): void {
   state.enemies = [];
   state.bullets = [];
   state.boss = createBoss(state.bossesDowned + 1);
+  pushEvent({ type: "boss" });
 }
 
-/** The one way the boss (or the test harness) is defeated. In endless mode
- * that is a wave cleared, not a run won: the meter resets and the next boss
- * is already queued up behind another KILLS_TO_BOSS. */
+/** The one way the boss (or the test harness) is defeated. Rounds 1 and 2 hand
+ * the run back with the meter reset and a harder boss queued behind another
+ * KILLS_TO_BOSS; the third one ends it. */
 export function defeatBoss(): void {
   if (state.phase !== "boss") return;
   state.boss = null;
   state.bullets = [];
+  state.enemies = [];
   state.bossesDowned += 1;
   kills = 0;
   state.progress = 0;
+
+  if (state.bossesDowned >= ROUNDS_TO_WIN) {
+    state.phase = "won";
+    pushEvent({ type: "victory" });
+    return;
+  }
   state.phase = "playing";
 }

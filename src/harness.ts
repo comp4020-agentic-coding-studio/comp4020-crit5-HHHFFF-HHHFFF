@@ -4,7 +4,7 @@
 // collision and a real animation frame call — so a passing test proves the
 // real path works, not a parallel test-only one.
 
-import { OVERDRIVE_MS } from "./entities";
+import { advanceBossPhase, bossBarIndex, OVERDRIVE_MS } from "./entities";
 import { defeatBoss, hitPlayer, registerKill, selectShip, state } from "./state";
 import { resetSpawnTimers, stepWorld } from "./step";
 
@@ -17,6 +17,10 @@ export interface Harness {
    * way ten real kills would. */
   registerKill(): void;
   defeatBoss(): void;
+  /** Takes `amount` off the boss and lets it react — the same two steps
+   * collision.ts runs when a player bullet lands, so a bar break, an enrage or
+   * a split reached this way is the real one, not a flag set by hand. */
+  damageBoss(amount: number): void;
   lives(): number;
   bossesDowned(): number;
   bossHp(): number;
@@ -39,6 +43,16 @@ export interface Harness {
     scrollY: number;
     progress: number;
     bossesDowned: number;
+    chargers: number;
+    boss: {
+      archetype: string;
+      round: number;
+      bars: number;
+      barIndex: number;
+      enraged: boolean;
+      split: boolean;
+      telegraphs: number;
+    } | null;
   };
 }
 
@@ -52,6 +66,11 @@ export function installHarness(): Harness {
     hitPlayer: () => hitPlayer(),
     registerKill: () => registerKill(),
     defeatBoss: () => defeatBoss(),
+    damageBoss: (amount: number) => {
+      if (!state.boss) return;
+      state.boss.hp -= amount;
+      advanceBossPhase(state.boss);
+    },
     lives: () => state.player?.lives ?? 0,
     bossesDowned: () => state.bossesDowned,
     bossHp: () => state.boss?.maxHp ?? 0,
@@ -71,6 +90,18 @@ export function installHarness(): Harness {
       scrollY: state.scrollY,
       progress: state.progress,
       bossesDowned: state.bossesDowned,
+      chargers: state.enemies.filter((enemy) => enemy.kind === "charger").length,
+      boss: state.boss
+        ? {
+            archetype: state.boss.archetype,
+            round: state.boss.round,
+            bars: state.boss.bars,
+            barIndex: bossBarIndex(state.boss),
+            enraged: state.boss.enraged,
+            split: state.boss.clone !== null,
+            telegraphs: state.boss.telegraphs.length,
+          }
+        : null,
     }),
   };
   (window as unknown as { harness: Harness }).harness = harness;

@@ -30,12 +30,12 @@ const IDLE_INPUT: InputState = { left: false, right: false, up: false, down: fal
 
 let normalSpawnMs = 800;
 let eventSpawnMs = 6000;
-let edgePowerUpMs = 16000;
+let edgePowerUpMs = 6000;
 
 export function resetSpawnTimers(): void {
   normalSpawnMs = 800;
   eventSpawnMs = 6000;
-  edgePowerUpMs = 16000;
+  edgePowerUpMs = 6000;
 }
 
 function maybeSpawnEnemies(dtMs: number): void {
@@ -62,9 +62,13 @@ function maybeDriftPowerUp(dtMs: number): void {
   if (state.phase !== "playing" && state.phase !== "boss") return;
   edgePowerUpMs -= dtMs;
   if (edgePowerUpMs <= 0) {
-    // Rare on purpose: the drift-in is a bonus on top of kill drops, and the
-    // two together used to fully upgrade a run before the ramp had bitten.
-    edgePowerUpMs = 22000 + Math.random() * 14000;
+    // Front-loaded, then rare. The run is three rounds long, so the opening
+    // minute is where a drift-in still changes how the first boss goes; after
+    // that it eases back to the old spacing, which exists because the two
+    // sources together used to fully upgrade a run before the ramp had bitten.
+    const eased = Math.max(0, 1 - state.elapsedMs / 60000);
+    const spacing = 22000 + Math.random() * 14000;
+    edgePowerUpMs = spacing * (1 - 0.6 * eased);
     state.powerUps.push(createEdgePowerUp(randomPowerUpKind()));
   }
 }
@@ -93,7 +97,9 @@ export function stepWorld(dtMs: number, input: InputState = IDLE_INPUT): void {
     stepEnemyMovement(dtSeconds, dtMs);
 
     if (state.phase === "boss" && state.boss && player) {
-      updateBoss(state.boss, dtSeconds, dtMs, state.bullets, player.x, player.y);
+      // The enemies array goes in as well as the bullets: the summoner's
+      // charge lanes spawn ships, not shots.
+      updateBoss(state.boss, dtSeconds, dtMs, state.bullets, state.enemies, player.x, player.y);
     }
 
     stepBulletsAndCollisions(dtSeconds, dtMs);

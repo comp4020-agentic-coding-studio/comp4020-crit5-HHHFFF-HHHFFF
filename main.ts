@@ -204,7 +204,7 @@ function syncKeyCaps(): void {
 // ---------- run loop ----------
 
 canvas.addEventListener("click", () => {
-  if (state.phase === "lost") {
+  if (state.phase === "lost" || state.phase === "won") {
     resetSpawnTimers();
     resetGame();
   }
@@ -230,8 +230,18 @@ function frame(now: number): void {
     if (event.type === "shoot") audio.playShoot();
     else if (event.type === "explosion") audio.playExplosion(event.kind);
     else if (event.type === "hit") audio.playHit();
+    else if (event.type === "boss") audio.setMusicMode("boss");
+    else if (event.type === "enrage") audio.setMusicMode("enrage");
+    else if (event.type === "victory") {
+      audio.setMusicMode("normal");
+      audio.playVictory();
+    }
   }
   state.events = [];
+
+  // Coming out of a boss round (or restarting) drops the music back; the
+  // events above only ever escalate it.
+  if (state.phase !== "boss" && audio.currentMusicMode() !== "normal") audio.setMusicMode("normal");
 
   const thrusting =
     (state.phase === "playing" || state.phase === "boss") && (input.left || input.right || input.up || input.down);
@@ -239,10 +249,23 @@ function frame(now: number): void {
 
   render.drawPageBackdrop(backdropCtx, state.scrollY, backdropCssWidth, backdropCssHeight, arenaCssWidth);
   render.clear(ctx, state.scrollY);
+
+  // Draw order is a fairness rule, not a style choice. The player's own fire is
+  // the densest thing on screen once the multiplier and the overdrive laser are
+  // up, and it used to be drawn in one pass with the enemy's --- so a wall of
+  // your own bullets could bury the one orb you had to dodge. Player fire goes
+  // underneath everything it might hide; enemy fire goes on top of everything
+  // except your ship, which you also always need to see.
+  if (state.boss) render.drawTelegraphs(ctx, state.boss);
+  for (const bullet of state.bullets) {
+    if (bullet.owner === "player") render.drawBullet(ctx, bullet);
+  }
   for (const enemy of state.enemies) render.drawEnemy(ctx, enemy);
   if (state.boss) render.drawBoss(ctx, state.boss);
-  for (const bullet of state.bullets) render.drawBullet(ctx, bullet);
   for (const powerUp of state.powerUps) render.drawPowerUp(ctx, powerUp);
+  for (const bullet of state.bullets) {
+    if (bullet.owner === "enemy") render.drawBullet(ctx, bullet);
+  }
   for (const explosion of state.explosions) render.drawExplosion(ctx, explosion);
   if (state.player) {
     render.drawPlayer(ctx, state.player);
@@ -255,6 +278,9 @@ function frame(now: number): void {
       formatDuration(state.elapsedMs),
       state.bossesDowned === 1 ? "1 boss downed" : `${state.bossesDowned} bosses downed`,
     ]);
+  }
+  if (state.phase === "won") {
+    render.drawEndBanner(ctx, "All three down", [formatDuration(state.elapsedMs), "click to fly it again"]);
   }
 
   requestAnimationFrame(frame);

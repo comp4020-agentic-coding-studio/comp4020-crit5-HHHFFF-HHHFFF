@@ -180,26 +180,128 @@ export function drawPlayer(ctx: CanvasRenderingContext2D, player: Player): void 
 }
 
 export function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
+  if (enemy.kind === "charger") {
+    // A streak behind it, so a diving ship reads as committed to its lane
+    // rather than as a patroller that happens to be moving down.
+    ctx.save();
+    const trail = ctx.createLinearGradient(0, enemy.y - 70, 0, enemy.y);
+    trail.addColorStop(0, "rgba(255, 95, 126, 0)");
+    trail.addColorStop(1, "rgba(255, 95, 126, 0.45)");
+    ctx.fillStyle = trail;
+    ctx.fillRect(enemy.x - 7, enemy.y - 70, 14, 70);
+    ctx.restore();
+    drawSprite(ctx, ENEMY_SPRITES.charger, enemy.x, enemy.y, 40, 40);
+    return;
+  }
   drawSprite(ctx, ENEMY_SPRITES[enemy.kind], enemy.x, enemy.y, 42, 42);
 }
 
-export function drawBoss(ctx: CanvasRenderingContext2D, boss: Boss): void {
-  drawSprite(ctx, BOSS_SPRITE, boss.x, boss.y, 124, 124);
+/** The summoner's charge lanes, drawn before anything else in the arena so a
+ * warning never sits on top of a bullet you are trying to read. It brightens
+ * as it runs out, which is the only cue for *when*, not just where. */
+export function drawTelegraphs(ctx: CanvasRenderingContext2D, boss: Boss): void {
+  for (const lane of boss.telegraphs) {
+    const urgency = 1 - Math.max(0, Math.min(1, lane.msLeft / 1100));
+    const width = 30 + urgency * 8;
+    ctx.save();
+    ctx.globalAlpha = 0.12 + urgency * 0.3;
+    const gradient = ctx.createLinearGradient(0, 0, 0, ARENA_HEIGHT);
+    gradient.addColorStop(0, "#ff5f7e");
+    gradient.addColorStop(1, "rgba(255, 95, 126, 0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(lane.x - width / 2, 0, width, ARENA_HEIGHT);
 
+    ctx.globalAlpha = 0.35 + urgency * 0.55;
+    ctx.strokeStyle = "#ff8fa6";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([10, 8]);
+    ctx.beginPath();
+    ctx.moveTo(lane.x, 0);
+    ctx.lineTo(lane.x, ARENA_HEIGHT);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawBossBody(ctx: CanvasRenderingContext2D, boss: Boss, x: number, y: number, ghost: boolean): void {
+  ctx.save();
+  if (ghost) ctx.globalAlpha = 0.72;
+
+  if (boss.enraged) {
+    // A red corona that breathes, plus a one-off ring on the frame it turns.
+    const pulse = 0.5 + 0.5 * Math.sin(boss.enrageMs / 70 + x);
+    ctx.save();
+    ctx.globalAlpha *= 0.22 + 0.2 * pulse;
+    ctx.fillStyle = "#ff2d55";
+    ctx.beginPath();
+    ctx.arc(x, y, 74 + pulse * 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  if (boss.enrageMs > 0) {
+    const t = 1 - boss.enrageMs / 900;
+    ctx.save();
+    ctx.globalAlpha *= 1 - t;
+    ctx.strokeStyle = "#ffd0da";
+    ctx.lineWidth = 6 * (1 - t);
+    ctx.beginPath();
+    ctx.arc(x, y, 60 + t * 220, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawSprite(ctx, BOSS_SPRITE, x, y, 124, 124);
+
+  // A bar break flashes the body white, so the boundary is something you see
+  // rather than something you infer from the meter.
+  if (boss.flashMs > 0) {
+    ctx.save();
+    ctx.globalAlpha *= Math.min(0.75, boss.flashMs / 420);
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x, y, 52, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+const ARCHETYPE_LABEL: Record<Boss["archetype"], string> = {
+  summoner: "SUMMONER",
+  berserker: "BERSERKER",
+  twin: "TWIN",
+};
+
+export function drawBoss(ctx: CanvasRenderingContext2D, boss: Boss): void {
+  drawBossBody(ctx, boss, boss.x, boss.y, false);
+  if (boss.clone) drawBossBody(ctx, boss, boss.clone.x, boss.clone.y, true);
+
+  // One segment per bar, spent ones left dark: three thin bars reads as "two
+  // more to go" at a glance, where one long bar at 66% does not.
   const barWidth = 200;
-  const x = ARENA_WIDTH / 2 - barWidth / 2;
+  const gap = 4;
+  const segment = (barWidth - gap * (boss.bars - 1)) / boss.bars;
+  const left = ARENA_WIDTH / 2 - barWidth / 2;
   // Sits below the lives and the two right-hand meters so nothing overlaps.
   const y = 52;
-  ctx.fillStyle = "#2a0f16";
-  ctx.fillRect(x, y, barWidth, 10);
-  ctx.fillStyle = "#ff3b6b";
-  ctx.fillRect(x, y, barWidth * Math.max(0, boss.hp / boss.maxHp), 10);
+  const perBar = boss.maxHp / boss.bars;
 
-  ctx.fillStyle = "#ff9ab4";
+  for (let i = 0; i < boss.bars; i++) {
+    // Bars fill from the left, and drain right to left as `hp` falls.
+    const filled = Math.max(0, Math.min(1, (boss.hp - i * perBar) / perBar));
+    const x = left + i * (segment + gap);
+    ctx.fillStyle = "#2a0f16";
+    ctx.fillRect(x, y, segment, 10);
+    ctx.fillStyle = boss.enraged ? "#ff2d55" : "#ff3b6b";
+    ctx.fillRect(x, y, segment * filled, 10);
+  }
+
+  ctx.fillStyle = boss.enraged ? "#ffd0da" : "#ff9ab4";
   ctx.font = "11px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillText(`WAVE ${boss.round}`, ARENA_WIDTH / 2, y + 14);
+  const label = boss.enraged ? `${ARCHETYPE_LABEL[boss.archetype]} · ENRAGED` : ARCHETYPE_LABEL[boss.archetype];
+  ctx.fillText(`ROUND ${boss.round}/3 · ${label}`, ARENA_WIDTH / 2, y + 14);
 }
 
 export function drawBullet(ctx: CanvasRenderingContext2D, bullet: Bullet): void {

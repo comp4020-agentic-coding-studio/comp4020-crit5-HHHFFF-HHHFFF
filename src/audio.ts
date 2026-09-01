@@ -96,8 +96,6 @@ function playNoiseBurst(
 // two noise bursts (a low "kick" on a syncopated subset of steps, a soft
 // high "hat" on every step) sharing the one noise buffer.
 
-const BPM = 168;
-const STEP_SECONDS = 60 / BPM / 2;
 const STEPS = 16;
 const SCHEDULE_AHEAD_SECONDS = 0.1;
 const LOOKAHEAD_MS = 25;
@@ -105,15 +103,53 @@ const LOOKAHEAD_MS = 25;
 const BASS_ROOT = 45; // A2
 const LEAD_ROOT = 69; // A4
 
-// A-minor-pentatonic offsets (0, 3, 5, 7, 10, 12 = A C D E G A) throughout,
-// so bass and lead always land in key no matter which step plays.
-const BASS_PATTERN: ReadonlyArray<number | null> = [
-  0, null, 0, null, 7, null, 7, null, 0, null, 3, null, 5, null, 7, null,
-];
-const LEAD_PATTERN: ReadonlyArray<number | null> = [
-  0, 3, 5, null, 7, 5, 3, null, 12, 10, 7, null, 5, 7, 3, null,
-];
-const KICK_STEPS = new Set([0, 6, 8, 14]);
+/** Three states of the run get three arrangements of the same riff, so the
+ * music says where you are without a word on screen: cruising, a boss, and a
+ * boss that has stopped holding back. All three stay in A minor pentatonic
+ * (0, 3, 5, 7, 10, 12 = A C D E G A) so switching mid-run never sounds like a
+ * key change --- except the enrage lead, which reaches for the flat five on
+ * purpose. */
+export type MusicMode = "normal" | "boss" | "enrage";
+
+interface Arrangement {
+  bpm: number;
+  bass: ReadonlyArray<number | null>;
+  lead: ReadonlyArray<number | null>;
+  kick: ReadonlySet<number>;
+  leadWave: OscillatorType;
+}
+
+const ARRANGEMENTS: Record<MusicMode, Arrangement> = {
+  normal: {
+    bpm: 168,
+    bass: [0, null, 0, null, 7, null, 7, null, 0, null, 3, null, 5, null, 7, null],
+    lead: [0, 3, 5, null, 7, 5, 3, null, 12, 10, 7, null, 5, 7, 3, null],
+    kick: new Set([0, 6, 8, 14]),
+    leadWave: "square",
+  },
+  // Boss: the bass stops resting --- a driving eighth on every step --- and
+  // the lead drops to a low, sparse motif that leaves room for the kicks.
+  boss: {
+    bpm: 176,
+    bass: [0, 0, 0, 0, 5, 5, 3, 3, 0, 0, 0, 0, 7, 7, 10, 10],
+    lead: [0, null, null, 3, null, null, 5, null, 7, null, null, 5, null, 3, null, null],
+    kick: new Set([0, 4, 8, 12, 14]),
+    leadWave: "square",
+  },
+  // Enrage: half again as fast, kick on every other step, and a lead that
+  // works the flat five (6) against the root for the dissonance.
+  enrage: {
+    bpm: 208,
+    bass: [0, 0, 6, 6, 0, 0, 7, 7, 0, 0, 6, 6, 3, 3, 7, 7],
+    lead: [12, 10, 7, 6, 7, 10, 12, 15, 12, 10, 7, 6, 7, 6, 3, 0],
+    kick: new Set([0, 2, 4, 6, 8, 10, 12, 14]),
+    leadWave: "sawtooth",
+  },
+};
+
+let musicMode: MusicMode = "normal";
+let arrangement = ARRANGEMENTS.normal;
+let stepSeconds = 60 / arrangement.bpm / 2;
 
 let nextStepTime = 0;
 let currentStep = 0;
@@ -121,20 +157,22 @@ let currentStep = 0;
 function scheduleStep(step: number, time: number): void {
   if (!musicGain) return;
 
-  const bassOffset = BASS_PATTERN[step];
-  if (bassOffset !== null) {
-    playTone("triangle", midiToFreq(BASS_ROOT + bassOffset), midiToFreq(BASS_ROOT + bassOffset), time, STEP_SECONDS * 1.8, 0.5, musicGain);
+  const bassOffset = arrangement.bass[step];
+  if (bassOffset !== null && bassOffset !== undefined) {
+    const freq = midiToFreq(BASS_ROOT + bassOffset);
+    playTone("triangle", freq, freq, time, stepSeconds * 1.8, 0.5, musicGain);
   }
 
-  const leadOffset = LEAD_PATTERN[step];
-  if (leadOffset !== null) {
-    playTone("square", midiToFreq(LEAD_ROOT + leadOffset), midiToFreq(LEAD_ROOT + leadOffset), time, STEP_SECONDS * 0.85, 0.2, musicGain);
+  const leadOffset = arrangement.lead[step];
+  if (leadOffset !== null && leadOffset !== undefined) {
+    const freq = midiToFreq(LEAD_ROOT + leadOffset);
+    playTone(arrangement.leadWave, freq, freq, time, stepSeconds * 0.85, 0.2, musicGain);
   }
 
   // Soft hat every step, harder kick on the syncopated subset --- the pulse
   // that gives the loop its "space battle" drive under the riff.
   playNoiseBurst("highpass", 6000, 6000, time, 0.045, 0.035, musicGain);
-  if (KICK_STEPS.has(step)) {
+  if (arrangement.kick.has(step)) {
     playNoiseBurst("lowpass", 500, 60, time, 0.16, 0.32, musicGain);
   }
 }
@@ -143,10 +181,49 @@ function scheduler(): void {
   if (!ctx) return;
   while (nextStepTime < ctx.currentTime + SCHEDULE_AHEAD_SECONDS) {
     scheduleStep(currentStep, nextStepTime);
-    nextStepTime += STEP_SECONDS;
+    nextStepTime += stepSeconds;
     currentStep = (currentStep + 1) % STEPS;
+    // Swapping at the top of the loop rather than mid-bar: a tempo change on
+    // step 7 sounds like a dropped beat, the same change on step 0 sounds
+    // like the next section starting.
+    if (currentStep === 0) applyPendingMode();
   }
   schedulerHandle = window.setTimeout(scheduler, LOOKAHEAD_MS);
+}
+
+let pendingMode: MusicMode | null = null;
+
+function applyPendingMode(): void {
+  if (pendingMode === null) return;
+  musicMode = pendingMode;
+  pendingMode = null;
+  arrangement = ARRANGEMENTS[musicMode];
+  stepSeconds = 60 / arrangement.bpm / 2;
+}
+
+/** Queues an arrangement change for the top of the next loop. Safe before
+ * initAudio(): it just records the mode, and the loop starts on it. */
+export function setMusicMode(mode: MusicMode): void {
+  if (mode === musicMode && pendingMode === null) return;
+  pendingMode = mode;
+  // Nothing is scheduling yet, so there is no "next bar" to wait for.
+  if (!ctx) applyPendingMode();
+}
+
+export function currentMusicMode(): MusicMode {
+  return musicMode;
+}
+
+/** A rising arpeggio for clearing the third boss --- the run's only win, so
+ * it gets the one sound that is not a weapon or an explosion. */
+export function playVictory(): void {
+  if (!ctx || !sfxGain) return;
+  const time = ctx.currentTime;
+  const notes = [0, 4, 7, 12, 16, 19, 24];
+  for (const [i, offset] of notes.entries()) {
+    const freq = midiToFreq(LEAD_ROOT + offset);
+    playTone("square", freq, freq, time + i * 0.09, 0.34, 0.24, sfxGain);
+  }
 }
 
 function startMusic(): void {

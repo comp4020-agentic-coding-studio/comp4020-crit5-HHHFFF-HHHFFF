@@ -24,49 +24,25 @@ function play(seconds: number): void {
  *
  * The ramp is what these tests are about, not the player's survival — and a
  * dead player stops the clock, which freezes difficulty, spawning and every
- * counter along with it. The first version of the fire-density test below
- * didn't do this, sat still for 150 seconds, died at about 15, and then
+ * counter along with it. The first version of the fire-density test in this
+ * file didn't do this, sat still for 150 seconds, died at about 15, and then
  * compared two frozen snapshots taken after death. It passed on luck. */
 function keepAlive(): void {
   if (state.player) state.player.lives = 100_000;
 }
 
-/** Counts every enemy bullet that appears over a window of play.
- *
- * Deliberately not `probe().enemyBullets`, which is how many happen to be
- * alive in the one frame you look. Two things make that a coin flip rather
- * than a measurement: a boss fight suppresses normal spawns entirely
- * (`maybeSpawnEnemies` returns early unless the phase is "playing"), and
- * `defeatBoss()` clears `state.bullets` outright — so a snapshot that lands
- * just after a boss dies legitimately reads 0 on a run that is in fact far
- * busier than it was at 20 seconds. Measured over 40 runs the snapshot
- * version failed 3 times (late 0 vs early 8, late 0 vs early 6, late 12 vs
- * early 14): a ~7% flake, which is what turned `pnpm check` red on a commit
- * that had changed nothing it measures.
- *
- * Counting distinct bullets across a window averages those boss phases in
- * instead of landing inside one. Identity works as the key because bullets
- * are freshly constructed objects — entities.ts pools nothing. */
-function enemyFireOver(seconds: number): number {
-  const seen = new WeakSet<object>();
-  let total = 0;
-  const frames = Math.round((seconds * 1000) / 16);
-  for (let i = 0; i < frames; i++) {
-    harness.step(1, 16);
-    for (const bullet of state.bullets) {
-      if (bullet.owner !== "enemy" || seen.has(bullet)) continue;
-      seen.add(bullet);
-      total += 1;
-    }
-  }
-  return total;
-}
-
-// The endless mode's whole promise is that standing still gets harder, and
-// none of that is visible to a rendered check: headless Chrome runs roughly
-// one animation frame per second of virtual time, so "is it busier at three
-// minutes" can't be asked of a screenshot at all.
-describe("the endless ramp", () => {
+// This file was spec/endless.test.ts, and the run it tested no longer exists:
+// the game is three boss rounds and then a win, so "a late run" tops out at
+// about a hundred seconds. Two of its tests went red on exactly that, which is
+// the right failure — they were asserting last week's design.
+//
+// What survives is the ramp itself, which still climbs with the clock inside a
+// run. What replaces the "a late run is busier" check is a sensor for the
+// brief's actual promise: "a stranger can pick it up and reach an ending
+// inside five minutes". That check was already known not to sense the ramp
+// (flattening difficultyAt left it green 40/40 — see CLAUDE.md, "Verify a
+// check by breaking what it names"), so it is not a loss.
+describe("the difficulty ramp", () => {
   beforeEach(() => {
     resetGame();
   });
@@ -80,45 +56,20 @@ describe("the endless ramp", () => {
   // The ramp's own sensor. `currentDifficulty()` is `difficultyAt(elapsedMs)`,
   // so what this pins down that the pure-function test above doesn't is the
   // wiring: that a run's clock actually advances and actually feeds the ramp.
-  // Flattening difficultyAt to `return 1` turns this red (4.0 -> 1.0) and,
-  // notably, turns nothing else in this file red — see the fire test below.
+  // Flattening difficultyAt to `return 1` turns this red (2.5 -> 1.0).
+  //
+  // 60 seconds, not the 120 it used to be: a run now ends, and an immortal
+  // idle player wins at around a hundred seconds, so a longer horizon would be
+  // measuring a stopped clock.
   it("climbs with the run clock, so standing still gets harder", () => {
     harness.select(0);
     keepAlive();
-    play(120);
+    play(60);
 
     const elapsed = harness.probe().elapsedMs;
-    expect(elapsed).toBeGreaterThan(115_000);
+    expect(elapsed).toBeGreaterThan(58_000);
     expect(currentDifficulty()).toBeCloseTo(difficultyAt(elapsed), 10);
-    expect(currentDifficulty()).toBeGreaterThan(3.5);
-  });
-
-  // Deliberately NOT sold as a ramp check, because it isn't one: flattening
-  // difficultyAt to a constant leaves it green 40/40. A late run is busier
-  // than an early one mostly because power-ups have accumulated, so the player
-  // kills faster, so boss rounds come round more often — and bosses fire
-  // densely. What this does sense is a run going quiet: spawning breaking,
-  // fire stopping, the field emptying out and never refilling.
-  //
-  // Both windows are 60s and both start from steady state (the first one after
-  // a 30s warm-up), because the earlier version compared a 20s window on a
-  // still-filling field against a 20s window 130s in, which mostly measured
-  // how long an empty arena takes to fill. Over 40 runs: early 172-295, late
-  // 495-1261, closest margin 200.
-  it("keeps a late run busier than an early one", () => {
-    harness.select(0);
-    keepAlive();
-    play(30);
-    const early = enemyFireOver(60);
-
-    resetGame();
-    harness.select(0);
-    keepAlive();
-    play(300);
-    const late = enemyFireOver(60);
-
-    expect(early).toBeGreaterThan(0);
-    expect(late).toBeGreaterThan(early);
+    expect(currentDifficulty()).toBeGreaterThan(2.2);
   });
 
   it("scrolls the backdrop, faster as the run goes on", () => {
@@ -127,27 +78,13 @@ describe("the endless ramp", () => {
     play(10);
     const firstTenSeconds = harness.probe().scrollY;
 
-    play(140);
+    play(60);
     const before = harness.probe().scrollY;
     play(10);
     const lastTenSeconds = harness.probe().scrollY - before;
 
     expect(firstTenSeconds).toBeGreaterThan(0);
     expect(lastTenSeconds).toBeGreaterThan(firstTenSeconds);
-  });
-
-  it("ends a run that does nothing, rather than running forever", () => {
-    // No keepAlive() here: this is the ramp's side of the bargain. A player
-    // who never moves has to lose, or "endless" would just mean "idle".
-    harness.select(0);
-    let frames = 0;
-    const guard = (10 * 60 * 1000) / 16; // ten minutes of play
-    while (harness.state() !== "lost" && frames < guard) {
-      harness.step(1, 16);
-      frames += 1;
-    }
-    expect(harness.state()).toBe("lost");
-    expect(frames).toBeLessThan(guard);
   });
 
   it("keeps patrolling enemies out of the player's half while they wander", () => {
@@ -160,6 +97,52 @@ describe("the endless ramp", () => {
     for (const enemy of patrolling) {
       expect(enemy.y).toBeLessThanOrEqual(state.player?.y ?? 0);
     }
+  });
+});
+
+// "a stranger can pick it up and reach an ending inside five minutes" is a
+// spec line, and it is the one that boss health directly threatens: the three
+// rounds are 120 / 240 / 360 hp against a base 5.6 dps, and it would be easy
+// to tune that into a fifteen-minute slog without noticing, because every
+// individual round would still feel fine.
+describe("a run reaches an ending", () => {
+  beforeEach(() => {
+    resetGame();
+  });
+
+  /** Steps until the run ends, and reports how long that took. */
+  function runToEnd(immortal: boolean): { phase: string; seconds: number } {
+    harness.select(0);
+    if (immortal) keepAlive();
+    const guard = (10 * 60 * 1000) / 16;
+    let frames = 0;
+    while (harness.state() !== "lost" && harness.state() !== "won" && frames < guard) {
+      harness.step(1, 16);
+      frames += 1;
+    }
+    return { phase: harness.state(), seconds: (frames * 16) / 1000 };
+  }
+
+  it("wins inside five minutes for a player who survives", () => {
+    // An immortal idle ship is not a person: it never dodges and never dies,
+    // so what this measures is the damage budget — how long 720 hp of boss and
+    // three meters of trash take at the base fire rate — not human skill. A
+    // real run is slower, which is why the bound is the spec's five minutes
+    // rather than the ~100s this actually takes.
+    const { phase, seconds } = runToEnd(true);
+
+    expect(phase).toBe("won");
+    expect(seconds).toBeLessThan(300);
+    // And not so fast that three rounds are over before they register.
+    expect(seconds).toBeGreaterThan(45);
+  });
+
+  it("ends a run that does nothing, rather than running forever", () => {
+    // No keepAlive(): a player who never moves has to lose. Auto-fire means
+    // they still make progress, so this is also the check that a passive run
+    // can't stumble into the win.
+    const { phase } = runToEnd(false);
+    expect(phase).toBe("lost");
   });
 });
 

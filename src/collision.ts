@@ -18,15 +18,26 @@ import {
   updateExplosion,
   updatePowerUp,
 } from "./entities";
+import { advanceBossPhase, bossBodies } from "./entities";
 import { currentDifficulty, defeatBoss, hitPlayer, pushEvent, registerKill, state } from "./state";
 
 const PLAYER_RADIUS = 16;
 const ENEMY_RADIUS = 14;
+const BOSS_RADIUS = 40;
 const PLAYER_INVULNERABLE_MS = 500;
-// Low on purpose. Drops used to land often enough that a run was fully
-// upgraded inside the first minute, which flattened the endless ramp before
-// it started — the power-ups have to stay something you notice arriving.
+// Drops are generous for the first stretch and then settle to the old rate.
+// Flat 0.12 meant an unlucky opening left you on the base gun going into a
+// 120hp round-1 boss, which is a long fight with nothing to show for it; the
+// run is only three rounds now, so the opening is where the tools have to
+// arrive. Late drops stay rare enough to notice.
 const POWERUP_DROP_CHANCE = 0.12;
+const POWERUP_EARLY_BONUS = 0.12;
+const POWERUP_EASE_MS = 90000;
+
+function powerUpDropChance(): number {
+  const eased = Math.max(0, 1 - state.elapsedMs / POWERUP_EASE_MS);
+  return POWERUP_DROP_CHANCE + POWERUP_EARLY_BONUS * eased;
+}
 
 function circleHit(ax: number, ay: number, ar: number, bx: number, by: number, br: number): boolean {
   const dx = ax - bx;
@@ -76,19 +87,33 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
     }
   }
 
-  // player bullets vs boss
-  if (state.boss) {
+  // player bullets vs boss --- and vs its clone, which shares the same hp, so
+  // a player who picks the "wrong" one of the two bodies still gets paid.
+  const boss = state.boss;
+  if (boss) {
     for (const bullet of state.bullets) {
       if (bullet.owner !== "player") continue;
-      if (circleHit(bullet.x, bullet.y, bullet.width / 2, state.boss.x, state.boss.y, 40)) {
-        state.boss.hp -= bullet.damage;
+      for (const body of bossBodies(boss)) {
+        if (!circleHit(bullet.x, bullet.y, bullet.width / 2, body.x, body.y, BOSS_RADIUS)) continue;
+        boss.hp -= bullet.damage;
         bullet.y = -9999;
+        break;
       }
     }
-    if (state.boss.hp <= 0) {
-      const { x, y } = state.boss;
+
+    // A bar emptying is a beat of its own: the screen clears, the boss flashes,
+    // and round 2 or 3 turns whatever it turns into. Without the clear, the
+    // spiral already in the air lands on top of the new pattern.
+    const transition = advanceBossPhase(boss);
+    if (transition) {
+      state.bullets = state.bullets.filter((bullet) => bullet.owner === "player");
+      if (transition === "enrage") pushEvent({ type: "enrage" });
+    }
+
+    if (boss.hp <= 0) {
+      const bodies = bossBodies(boss).map((body) => ({ x: body.x, y: body.y }));
       defeatBoss();
-      state.explosions.push(createExplosion("boss", x, y));
+      for (const body of bodies) state.explosions.push(createExplosion("boss", body.x, body.y));
       pushEvent({ type: "explosion", kind: "boss" });
     }
   }
@@ -101,7 +126,7 @@ export function stepBulletsAndCollisions(dtSeconds: number, dtMs: number): void 
       pushEvent({ type: "explosion", kind: "enemy" });
       if (enemy.kind === "normal") {
         registerKill();
-        if (Math.random() < POWERUP_DROP_CHANCE) {
+        if (Math.random() < powerUpDropChance()) {
           state.powerUps.push(createPowerUp(randomPowerUpKind(), enemy.x, enemy.y));
         }
       }

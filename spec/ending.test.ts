@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { ROUNDS_TO_WIN } from "../src/entities";
 import { installHarness } from "../src/harness";
 import { registerKill, resetGame, state } from "../src/state";
 
@@ -20,12 +21,16 @@ function killToBoss(): void {
 // Everything below goes through the exact functions a real bullet collision
 // calls (state.ts), not a parallel test-only path.
 //
-// The game is endless, so the rule under test is the boss *cycle*: the meter
-// fills, a boss arrives, downing it hands the run back rather than ending it,
-// and the next one is stronger. The single exit is death. An earlier version
-// of this file asserted defeatBoss() reached a 'won' phase; that phase no
-// longer exists, and a test still asserting it would be asserting a contract
-// the game doesn't offer.
+// The rule under test is the shape of a run: three boss rounds, each meter
+// fill handing over to a tougher boss, and two ways out. Downing bosses one
+// and two resumes play; downing the third wins. Losing stays possible at every
+// point, which is the half of the spec line a win state can quietly break.
+//
+// This file has now asserted the opposite twice. It once claimed a 'won' phase
+// that had been removed, then claimed the game was unwinnable; the game is
+// three rounds long as of this commit and the count lives in ROUNDS_TO_WIN,
+// which is imported here rather than retyped, so a change to the run length
+// moves this test with it instead of leaving it asserting last week's design.
 describe("the game ends", () => {
   beforeEach(() => {
     resetGame();
@@ -42,19 +47,49 @@ describe("the game ends", () => {
     expect(harness.lives()).toBe(0);
   });
 
-  it("is unwinnable: downing a boss resumes the run instead of ending it", () => {
+  it("hands the run back after every boss but the last", () => {
     harness.select(0);
 
-    killToBoss();
-    expect(harness.state()).toBe("boss");
-    expect(state.progress).toBe(1);
+    for (let round = 1; round < ROUNDS_TO_WIN; round++) {
+      killToBoss();
+      expect(harness.state()).toBe("boss");
+      expect(state.progress).toBe(1);
 
-    harness.defeatBoss();
-    expect(harness.state()).toBe("playing");
-    expect(harness.bossesDowned()).toBe(1);
-    // The meter has to reset, or the next kill would re-trigger a boss
-    // immediately and the cycle would collapse.
-    expect(state.progress).toBe(0);
+      harness.defeatBoss();
+      expect(harness.state()).toBe("playing");
+      expect(harness.bossesDowned()).toBe(round);
+      // The meter has to reset, or the next kill would re-trigger a boss
+      // immediately and the cycle would collapse.
+      expect(state.progress).toBe(0);
+    }
+  });
+
+  it("is won by downing the third boss, not the first or the second", () => {
+    harness.select(0);
+
+    for (let round = 1; round <= ROUNDS_TO_WIN; round++) {
+      killToBoss();
+      harness.defeatBoss();
+      const last = round === ROUNDS_TO_WIN;
+      expect(harness.state()).toBe(last ? "won" : "playing");
+    }
+    expect(harness.bossesDowned()).toBe(ROUNDS_TO_WIN);
+  });
+
+  it("cannot be lost after it has been won", () => {
+    harness.select(0);
+    for (let round = 1; round <= ROUNDS_TO_WIN; round++) {
+      killToBoss();
+      harness.defeatBoss();
+    }
+    expect(harness.state()).toBe("won");
+
+    // A stray bullet resolving on the same frame as the kill shot must not
+    // turn a win into a loss.
+    harness.hitPlayer();
+    harness.hitPlayer();
+    harness.hitPlayer();
+    expect(harness.state()).toBe("won");
   });
 
   it("hands out a tougher boss each round", () => {

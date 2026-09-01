@@ -117,7 +117,10 @@ export interface Player {
   overdriveMs: number; // > 0 while the free laser is running
 }
 
-export type EnemyKind = "normal" | "event";
+// "charger" is the summoner's: it ignores the patrol band entirely and dives
+// the full height of the arena down one lane, after that lane has been
+// telegraphed.
+export type EnemyKind = "normal" | "event" | "charger";
 
 export interface Enemy {
   kind: EnemyKind;
@@ -137,17 +140,42 @@ export interface Enemy {
   arcAmplitude?: number;
 }
 
-export type BossPattern = "radial" | "aimed" | "spread";
+// Three rounds, three different fights. The archetype is what makes a round
+// its own encounter rather than the same boss with a bigger number: each one
+// fires on its own logic and carries one signature mechanic.
+export type BossArchetype = "summoner" | "berserker" | "twin";
+
+/** A lane the summoner has marked but not yet charged down. The warning is the
+ * mechanic --- a dive out of nowhere is unfair, the same dive announced a
+ * second early is a dodge you either make or don't. */
+export interface BossTelegraph {
+  x: number;
+  msLeft: number;
+}
 
 export interface Boss {
   x: number;
   y: number;
   vx: number;
-  hp: number;
+  hp: number; // the whole boss, not the current bar
   maxHp: number;
   patternCooldownMs: number;
-  pattern: BossPattern;
-  round: number; // 1-based; endless mode keeps handing out tougher ones
+  round: number; // 1-based
+  archetype: BossArchetype;
+  /** Health bars. Damage runs through them one at a time; `barIndex` is which
+   * one is draining, counting down, so 1 is always the last. */
+  bars: number;
+  barIndex: number;
+  volley: number; // volleys fired, which is what rotates the spiral
+  enraged: boolean;
+  enrageMs: number; // > 0 while the enrage flare plays
+  flashMs: number; // > 0 just after a bar breaks
+  telegraphs: BossTelegraph[];
+  summonMs: number;
+  /** The twin's copy of itself, mirrored across the arena and firing in
+   * lockstep. Shares `hp`: shooting either body drains the same bar, so
+   * picking the "wrong" target never wastes a magazine. */
+  clone: { x: number; y: number } | null;
 }
 
 export type BulletOwner = "player" | "enemy";
@@ -389,6 +417,13 @@ export function updateEnemy(
     return;
   }
 
+  if (enemy.kind === "charger") {
+    // Straight down the telegraphed lane, no wander and no firing: the threat
+    // is the body, and the lane was shown a beat before it arrived.
+    enemy.y += enemy.vy * dtSeconds;
+    return;
+  }
+
   // event squad member: arc in from the bottom edge, out the top
   enemy.arcT = (enemy.arcT ?? 0) + dtSeconds / (enemy.arcDuration ?? 4.5);
   const t = Math.min(1, Math.max(0, enemy.arcT));
@@ -397,11 +432,27 @@ export function updateEnemy(
 }
 
 export function isEnemyOffscreen(enemy: Enemy): boolean {
+  if (enemy.kind === "charger") return enemy.y > ARENA_HEIGHT + 40;
   return enemy.kind === "event" && (enemy.arcT ?? 0) > 1;
 }
 
+// The run is three rounds long. Each boss carries one 120hp bar per round, so
+// the totals are 120 / 240 / 360 and every bar is the same size --- which is
+// what makes "round 2 enrages below half" and "round 3 clones itself on its
+// last bar" the same trigger: the final bar starting.
+export const ROUNDS_TO_WIN = 3;
+export const BOSS_BAR_HP = 120;
+
+const ARCHETYPES: BossArchetype[] = ["summoner", "berserker", "twin"];
+const ENRAGE_FLARE_MS = 900;
+const BAR_BREAK_MS = 420;
+const TELEGRAPH_MS = 1100;
+const SUMMON_INTERVAL_MS = 4200;
+const CHARGE_SPEED = 330;
+
 export function createBoss(round: number): Boss {
-  const hp = 40 + (round - 1) * 25;
+  const bars = Math.max(1, Math.min(ROUNDS_TO_WIN, round));
+  const hp = BOSS_BAR_HP * bars;
   return {
     x: ARENA_WIDTH / 2,
     y: 140,
@@ -409,81 +460,185 @@ export function createBoss(round: number): Boss {
     hp,
     maxHp: hp,
     patternCooldownMs: 0,
-    pattern: "radial",
     round,
+    archetype: ARCHETYPES[Math.min(round, ROUNDS_TO_WIN) - 1],
+    bars,
+    barIndex: bars,
+    volley: 0,
+    enraged: false,
+    enrageMs: 0,
+    flashMs: 0,
+    telegraphs: [],
+    summonMs: 2200,
+    clone: null,
   };
 }
 
-const BOSS_PATTERNS: BossPattern[] = ["radial", "aimed", "spread"];
+export function bossBarHp(boss: Boss): number {
+  return boss.maxHp / boss.bars;
+}
+
+/** Which bar is draining, counting down --- 1 is always the last one. */
+export function bossBarIndex(boss: Boss): number {
+  return Math.max(1, Math.ceil(boss.hp / bossBarHp(boss)));
+}
+
+export type BossTransition = "enrage" | "clone" | "bar-break";
+
+/** Applies whatever the boss's latest damage just triggered, and says what it
+ * was so the caller can make a noise about it. Called from collision.ts, where
+ * hp actually changes, because this module has no access to game state or the
+ * event queue and shouldn't get any. */
+export function advanceBossPhase(boss: Boss): BossTransition | null {
+  const index = bossBarIndex(boss);
+  if (index >= boss.barIndex) return null;
+  boss.barIndex = index;
+  boss.flashMs = BAR_BREAK_MS;
+
+  if (index === 1 && boss.archetype === "berserker" && !boss.enraged) {
+    boss.enraged = true;
+    boss.enrageMs = ENRAGE_FLARE_MS;
+    // Cut whatever it was waiting on, so the flare is followed by fire rather
+    // than by a suspiciously calm second.
+    boss.patternCooldownMs = Math.min(boss.patternCooldownMs, 420);
+    return "enrage";
+  }
+  if (index === 1 && boss.archetype === "twin" && !boss.clone) {
+    boss.clone = { x: ARENA_WIDTH - boss.x, y: boss.y };
+    return "clone";
+  }
+  return "bar-break";
+}
+
+/** Both bodies for a twin that has split, one otherwise. */
+export function bossBodies(boss: Boss): Array<{ x: number; y: number }> {
+  return boss.clone ? [boss, boss.clone] : [boss];
+}
+
+export function createCharger(x: number, index: number): Enemy {
+  return {
+    kind: "charger",
+    x,
+    // Stacked above the arena so a lane arrives as a column, not a single ship.
+    y: -40 - index * 46,
+    vx: 0,
+    vy: CHARGE_SPEED,
+    speed: CHARGE_SPEED,
+    hp: 3,
+    fireCooldownMs: Number.POSITIVE_INFINITY,
+    fireIntervalMs: Number.POSITIVE_INFINITY,
+    dirChangeMs: Number.POSITIVE_INFINITY,
+  };
+}
+
+function pushOrb(bullets: Bullet[], x: number, y: number, angle: number, speed: number, size: number): void {
+  bullets.push({
+    owner: "enemy",
+    x,
+    y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    width: size,
+    height: size,
+    damage: 1,
+  });
+}
+
+function volleyIntervalMs(boss: Boss): number {
+  if (boss.archetype === "summoner") return 1400;
+  if (boss.archetype === "berserker") return boss.enraged ? 380 : 900;
+  return 1100;
+}
+
+/** Each archetype's volley. Deliberately different shapes, not the same shape
+ * with a different count: an aimed fan you sidestep, a spiral you read the
+ * rotation of, and a pulse you find the gap in. */
+function fireVolley(boss: Boss, bullets: Bullet[], playerX: number, playerY: number): void {
+  if (boss.archetype === "summoner") {
+    // Sparse and aimed. The lane charges are this fight's pressure; a wall of
+    // bullets on top of them would leave nowhere to stand.
+    const base = Math.atan2(playerY - boss.y, playerX - boss.x);
+    for (let i = -1; i <= 1; i++) pushOrb(bullets, boss.x, boss.y, base + i * 0.18, 210, 8);
+    return;
+  }
+
+  if (boss.archetype === "berserker") {
+    const count = boss.enraged ? 14 : 11;
+    const spin = boss.volley * (boss.enraged ? 0.55 : 0.32);
+    // Enraged it throws a second arm winding the other way, so the readable
+    // one-way spiral becomes a lattice.
+    const arms = boss.enraged ? [1, -1] : [1];
+    for (const dir of arms) {
+      for (let i = 0; i < count; i++) {
+        const angle = dir * spin + (i / count) * Math.PI * 2;
+        pushOrb(bullets, boss.x, boss.y, angle, boss.enraged ? 250 : 205, boss.enraged ? 10 : 8);
+      }
+    }
+    return;
+  }
+
+  // twin: ring pulses, half-step rotated every other volley so the gaps move.
+  const count = 12;
+  const offset = (boss.volley % 2) * (Math.PI / count);
+  for (const body of bossBodies(boss)) {
+    for (let i = 0; i < count; i++) {
+      pushOrb(bullets, body.x, body.y, offset + (i / count) * Math.PI * 2, 200, 9);
+    }
+  }
+}
+
+/** Marks lanes, then --- a beat later --- sends a column of chargers down each
+ * marked lane. Nothing spawns on the frame a lane is marked, which is the
+ * whole point and is what spec/boss.test.ts pins down. */
+function updateSummons(boss: Boss, dtMs: number, enemies: Enemy[]): void {
+  if (boss.telegraphs.length > 0) {
+    const due: BossTelegraph[] = [];
+    const pending: BossTelegraph[] = [];
+    for (const lane of boss.telegraphs) {
+      lane.msLeft -= dtMs;
+      (lane.msLeft <= 0 ? due : pending).push(lane);
+    }
+    for (const lane of due) {
+      for (let i = 0; i < 3; i++) enemies.push(createCharger(lane.x, i));
+    }
+    boss.telegraphs = pending;
+  }
+
+  boss.summonMs -= dtMs;
+  if (boss.summonMs > 0) return;
+  boss.summonMs = SUMMON_INTERVAL_MS;
+  for (let i = 0; i < 2; i++) {
+    const x = PATROL_MARGIN + Math.random() * (ARENA_WIDTH - PATROL_MARGIN * 2);
+    boss.telegraphs.push({ x, msLeft: TELEGRAPH_MS });
+  }
+}
 
 export function updateBoss(
   boss: Boss,
   dtSeconds: number,
   dtMs: number,
   bullets: Bullet[],
+  enemies: Enemy[],
   playerX: number,
   playerY: number,
 ): void {
-  boss.x += boss.vx * dtSeconds;
+  if (boss.flashMs > 0) boss.flashMs = Math.max(0, boss.flashMs - dtMs);
+  if (boss.enrageMs > 0) boss.enrageMs = Math.max(0, boss.enrageMs - dtMs);
+
+  boss.x += boss.vx * (boss.enraged ? 1.7 : 1) * dtSeconds;
   if (boss.x < 80 || boss.x > ARENA_WIDTH - 80) boss.vx *= -1;
+  if (boss.clone) {
+    boss.clone.x = ARENA_WIDTH - boss.x;
+    boss.clone.y = boss.y;
+  }
+
+  if (boss.archetype === "summoner") updateSummons(boss, dtMs, enemies);
 
   boss.patternCooldownMs -= dtMs;
   if (boss.patternCooldownMs > 0) return;
-  // Later rounds cycle patterns faster and throw more per volley. Both are
-  // floored/capped so round 9 is brutal without being a solid wall.
-  boss.patternCooldownMs = Math.max(650, 1500 - (boss.round - 1) * 150);
-  boss.pattern = BOSS_PATTERNS[(BOSS_PATTERNS.indexOf(boss.pattern) + 1) % BOSS_PATTERNS.length];
-
-  const extra = Math.min(6, boss.round - 1);
-  const speed = 200 + extra * 20;
-  if (boss.pattern === "radial") {
-    const count = 10 + extra * 3;
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      bullets.push({
-        owner: "enemy",
-        x: boss.x,
-        y: boss.y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        width: 8,
-        height: 8,
-        damage: 1,
-      });
-    }
-  } else if (boss.pattern === "aimed") {
-    const dx = playerX - boss.x;
-    const dy = playerY - boss.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const arm = 1 + Math.floor(extra / 2);
-    for (let i = -arm; i <= arm; i++) {
-      bullets.push({
-        owner: "enemy",
-        x: boss.x,
-        y: boss.y,
-        vx: (dx / len) * speed + i * 40,
-        vy: (dy / len) * speed,
-        width: 8,
-        height: 8,
-        damage: 1,
-      });
-    }
-  } else {
-    const count = 5 + extra * 2;
-    for (let i = 0; i < count; i++) {
-      const angle = Math.PI / 2 + ((i - (count - 1) / 2) * Math.PI) / 8;
-      bullets.push({
-        owner: "enemy",
-        x: boss.x,
-        y: boss.y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        width: 8,
-        height: 8,
-        damage: 1,
-      });
-    }
-  }
+  boss.patternCooldownMs = volleyIntervalMs(boss);
+  boss.volley += 1;
+  fireVolley(boss, bullets, playerX, playerY);
 }
 
 export function updateBullet(bullet: Bullet, dtSeconds: number): void {
